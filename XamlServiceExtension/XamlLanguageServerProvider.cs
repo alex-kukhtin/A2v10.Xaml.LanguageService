@@ -24,9 +24,11 @@ namespace XamlServiceExtension;
 [VisualStudioContribution]
 internal class XamlLanguageServerProvider(ExtensionLog _log) : LanguageServerProvider
 {
-    // The current server instance. If VS calls CreateServerConnectionAsync again
-    // (e.g. when restarting the LSP), the previous instance must be disposed cleanly.
-    private XamlLangServer? _currentServer;
+    // Pin: VS holds the provider for the whole extension lifetime. Holding the run-task
+    // here keeps the async state machine alive, which transitively keeps XamlLangServer
+    // and AssemblyResolver reachable. Pinning the server object instead would NOT pin
+    // the task — there's no field on XamlLangServer that references it.
+    private Task? _runTask;
 
     [VisualStudioContribution]
     public static DocumentTypeConfiguration VXamlDocumentType => new("vxaml")
@@ -39,7 +41,10 @@ internal class XamlLanguageServerProvider(ExtensionLog _log) : LanguageServerPro
         "%XamlLSP.DisplayName%",
         [DocumentFilter.FromDocumentType(VXamlDocumentType)]);
 
-    public override async Task<IDuplexPipe?> CreateServerConnectionAsync(CancellationToken cancellationToken)
+    // The CancellationToken parameter is the operation token (scoped to this call), not a
+    // server-lifetime token — we deliberately do not propagate it into XamlLangServer.
+    // The server is created once per provider lifetime and dies with the OOP host process.
+    public override Task<IDuplexPipe?> CreateServerConnectionAsync(CancellationToken cancellationToken)
     {
         var ws = Extensibility.Workspaces();
 
@@ -49,58 +54,28 @@ internal class XamlLanguageServerProvider(ExtensionLog _log) : LanguageServerPro
             return results.FirstOrDefault()?.Path;
         }
 
-        // If VS is restarting the server, tear down the previous instance before starting a new one.
-        await ClearAsync();
-
         _log.Log("CreateServerConnectionAsync — in-process OmniSharp LSP");
-        try
-        {
-            // In-memory duplex channel: one half goes to VS, the other to the server.
-            var (sdkSide, serverSide) = FullDuplexStream.CreatePair();
 
-            var server = new XamlLangServer(FindCsProjAsync);
+        // In-memory duplex channel: one half goes to VS, the other to the server.
+        var (sdkSide, serverSide) = FullDuplexStream.CreatePair();
 
-            // Fire-and-forget start: LanguageServer.From waits for initialize from VS,
-            // which only arrives after we return the pipe.
-            var runTask = server.Start(serverSide, serverSide);
-            _currentServer = server;
+        var server = new XamlLangServer(FindCsProjAsync);
 
-            _ = runTask.ContinueWith(
-                t => _log.Log($"server faulted: {t.Exception}"),
-                CancellationToken.None,
-                TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default
-             );
+        // Do not await: LanguageServer.From inside waits for "initialize" from VS,
+        // which only arrives after we return the pipe.
+        _runTask = server.Start(serverSide, serverSide);
 
-            _log.Log("OmniSharp server is starting, returning pipe to VS");
-            return sdkSide.UsePipe(0, null, CancellationToken.None);
-        }
-        catch (Exception ex)
-        {
-            _log.Log($"ABORT: {ex}");
-            await ClearAsync();
-            return null;
-        }
+        _ = _runTask.ContinueWith(
+            t => _log.Log($"server faulted: {t.Exception}"),
+            CancellationToken.None,
+            TaskContinuationOptions.OnlyOnFaulted,
+            TaskScheduler.Default);
+
+        _log.Log("OmniSharp server is starting, returning pipe to VS");
+        return Task.FromResult<IDuplexPipe?>(sdkSide.UsePipe(0, null, CancellationToken.None));
     }
 
-    async Task ClearAsync()
-    {
-        if (_currentServer is null)
-            return;
-        _log.Log("Disposing server instance");
-        var cs = _currentServer;
-        _currentServer = null;
-        try
-        {
-            await cs.DisposeAsync();
-        } 
-        catch
-        {
-            // do nothing
-        }
-    }
-
-    public async override Task OnServerInitializationResultAsync(
+    public override Task OnServerInitializationResultAsync(
         ServerInitializationResult result,
         LanguageServerInitializationFailureInfo? failureInfo,
         CancellationToken cancellationToken)
@@ -111,11 +86,8 @@ internal class XamlLanguageServerProvider(ExtensionLog _log) : LanguageServerPro
             _log.Log($"  failureInfo: {failureInfo}");
 
         if (result == ServerInitializationResult.Failed)
-        {
             Enabled = false;
-            await ClearAsync();
-        }
 
-        await base.OnServerInitializationResultAsync(result, failureInfo, cancellationToken);
+        return base.OnServerInitializationResultAsync(result, failureInfo, cancellationToken);
     }
 }

@@ -11,28 +11,25 @@ using OmniSharp.Extensions.LanguageServer.Server;
 
 namespace XamlLanguageServer;
 
-public sealed class XamlLangServer(Func<CancellationToken, Task<String?>> findCsproj) : IAsyncDisposable
+// In-process LSP server. Lives for the lifetime of the OOP service host process —
+// when the host dies, the run-task, streams and OmniSharp instance go with it.
+// No Dispose: LanguageServerProvider exposes no restart hook, so this object is
+// created once per process and torn down only by process exit.
+public sealed class XamlLangServer(Func<CancellationToken, Task<String?>> findCsproj)
 {
-    private readonly CancellationTokenSource _cts = new();
     private readonly AssemblyResolver _assemblyResolver = new(findCsproj);
 
-    private LanguageServer? _server;
-    private Task? _runTask;
-    private Int32 _disposed;
-
-    // Starts the run loop fire-and-forget. The Task is kept so Dispose can await exit.
+    // Starts the run loop. The caller must NOT await the returned Task:
+    // LanguageServer.From inside waits for "initialize" from VS, which only
+    // arrives after the provider returns the pipe — awaiting here would deadlock.
+    // The caller MUST keep a reference to the returned Task (or to this server) in a
+    // long-lived field so the async state machine is not GC-collected mid-flight.
     [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "VSTHRD200:Use \"Async\" suffix for async methods", Justification = "Returns the long-running background task; the method itself is not an async TAP method")]
-    public Task Start(Stream input, Stream output)
-    {
-        _runTask = RunAsync(input, output);
-        return _runTask;
-    }
+    public Task Start(Stream input, Stream output) => RunAsync(input, output);
 
     private async Task RunAsync(Stream input, Stream output)
     {
-        // Awaiting LanguageServer.From here would deadlock: it waits for initialize from VS,
-        // which only arrives after the provider returns the pipe.
-        _server = await LanguageServer.From(opts => opts
+        var server = await LanguageServer.From(opts => opts
             .WithInput(input)
             .WithOutput(output)
             .WithServices(s =>
@@ -41,34 +38,9 @@ public sealed class XamlLangServer(Func<CancellationToken, Task<String?>> findCs
                  .AddSingleton(_assemblyResolver);
             })
             .WithHandler<TextDocumentSyncHandler>()
-            .WithHandler<CompletionHandler>(), _cts.Token);
+            .WithHandler<CompletionHandler>());
 
-        await _server.WaitForExit;
-    }
-
-    public async ValueTask DisposeAsync()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-            return;
-
-        try { await _cts.CancelAsync(); } catch { /* CTS already disposed — ignore */ }
-
-        _server?.Dispose();
-
-        if (_runTask is not null)
-        {
-            // Wait for graceful exit, but with a bounded timeout — never block forever.
-            try
-            {
-                await Task.WhenAny(_runTask, Task.Delay(TimeSpan.FromSeconds(2))).ConfigureAwait(false);
-            }
-            catch
-            {
-                // Any error from _runTask is already handled by the provider's ContinueWith subscriber.
-            }
-        }
-
-        _assemblyResolver.Dispose();
-        _cts.Dispose();
+        await server.WaitForExit;
+        _assemblyResolver?.Dispose();
     }
 }
