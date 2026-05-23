@@ -19,7 +19,7 @@ internal class ExtensionEntrypoint : Extension
                 version: ExtensionAssemblyVersion,
                 publisherName: "Oleksandr Kukhtin",
                 displayName: "A2v10 Xaml Language Service",
-                description: "Extension description"),
+                description: "IntelliSense and tooling for A2v10 XAML (.vxaml) — completion, diagnostics and hover powered by an in-process Language Server."),
     };
 
     /// <inheritdoc />

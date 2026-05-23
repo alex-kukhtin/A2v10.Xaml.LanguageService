@@ -11,9 +11,9 @@ using OmniSharp.Extensions.LanguageServer.Server;
 
 namespace XamlLanguageServer;
 
-public sealed class XamlLangServer(Func<CancellationToken, Task<String?>> findCsproj, CancellationToken externalCt) : IAsyncDisposable
+public sealed class XamlLangServer(Func<CancellationToken, Task<String?>> findCsproj) : IAsyncDisposable
 {
-    private readonly CancellationTokenSource _cts = CancellationTokenSource.CreateLinkedTokenSource(externalCt);
+    private readonly CancellationTokenSource _cts = new();
     private readonly AssemblyResolver _assemblyResolver = new(findCsproj);
 
     private LanguageServer? _server;
@@ -21,9 +21,8 @@ public sealed class XamlLangServer(Func<CancellationToken, Task<String?>> findCs
     private Int32 _disposed;
 
     // Starts the run loop fire-and-forget. The Task is kept so Dispose can await exit.
-    // Awaiting LanguageServer.From here would deadlock: it waits for initialize from VS,
-    // which only arrives after the provider returns the pipe.
-    public Task StartAsync(Stream input, Stream output)
+    [System.Diagnostics.CodeAnalysis.SuppressMessage("Style", "VSTHRD200:Use \"Async\" suffix for async methods", Justification = "Returns the long-running background task; the method itself is not an async TAP method")]
+    public Task Start(Stream input, Stream output)
     {
         _runTask = RunAsync(input, output);
         return _runTask;
@@ -31,6 +30,8 @@ public sealed class XamlLangServer(Func<CancellationToken, Task<String?>> findCs
 
     private async Task RunAsync(Stream input, Stream output)
     {
+        // Awaiting LanguageServer.From here would deadlock: it waits for initialize from VS,
+        // which only arrives after the provider returns the pipe.
         _server = await LanguageServer.From(opts => opts
             .WithInput(input)
             .WithOutput(output)

@@ -50,12 +50,7 @@ internal class XamlLanguageServerProvider(ExtensionLog _log) : LanguageServerPro
         }
 
         // If VS is restarting the server, tear down the previous instance before starting a new one.
-        if (_currentServer is not null)
-        {
-            _log.Log("CreateServerConnectionAsync: disposing previous server instance");
-            await _currentServer.DisposeAsync();
-            _currentServer = null;
-        }
+        await ClearAsync();
 
         _log.Log("CreateServerConnectionAsync — in-process OmniSharp LSP");
         try
@@ -63,17 +58,19 @@ internal class XamlLanguageServerProvider(ExtensionLog _log) : LanguageServerPro
             // In-memory duplex channel: one half goes to VS, the other to the server.
             var (sdkSide, serverSide) = FullDuplexStream.CreatePair();
 
-            var server = new XamlLangServer(FindCsProjAsync, cancellationToken);
+            var server = new XamlLangServer(FindCsProjAsync);
+
             // Fire-and-forget start: LanguageServer.From waits for initialize from VS,
             // which only arrives after we return the pipe.
-            var runTask = server.StartAsync(serverSide, serverSide);
+            var runTask = server.Start(serverSide, serverSide);
             _currentServer = server;
 
             _ = runTask.ContinueWith(
                 t => _log.Log($"server faulted: {t.Exception}"),
                 CancellationToken.None,
                 TaskContinuationOptions.OnlyOnFaulted,
-                TaskScheduler.Default);
+                TaskScheduler.Default
+             );
 
             _log.Log("OmniSharp server is starting, returning pipe to VS");
             return sdkSide.UsePipe(0, null, CancellationToken.None);
@@ -81,16 +78,29 @@ internal class XamlLanguageServerProvider(ExtensionLog _log) : LanguageServerPro
         catch (Exception ex)
         {
             _log.Log($"ABORT: {ex}");
-            if (_currentServer is not null)
-            {
-                await _currentServer.DisposeAsync();
-                _currentServer = null;
-            }
+            await ClearAsync();
             return null;
         }
     }
 
-    public override Task OnServerInitializationResultAsync(
+    async Task ClearAsync()
+    {
+        if (_currentServer is null)
+            return;
+        _log.Log("Disposing server instance");
+        var cs = _currentServer;
+        _currentServer = null;
+        try
+        {
+            await cs.DisposeAsync();
+        } 
+        catch
+        {
+            // do nothing
+        }
+    }
+
+    public async override Task OnServerInitializationResultAsync(
         ServerInitializationResult result,
         LanguageServerInitializationFailureInfo? failureInfo,
         CancellationToken cancellationToken)
@@ -101,8 +111,11 @@ internal class XamlLanguageServerProvider(ExtensionLog _log) : LanguageServerPro
             _log.Log($"  failureInfo: {failureInfo}");
 
         if (result == ServerInitializationResult.Failed)
+        {
             Enabled = false;
+            await ClearAsync();
+        }
 
-        return base.OnServerInitializationResultAsync(result, failureInfo, cancellationToken);
+        await base.OnServerInitializationResultAsync(result, failureInfo, cancellationToken);
     }
 }

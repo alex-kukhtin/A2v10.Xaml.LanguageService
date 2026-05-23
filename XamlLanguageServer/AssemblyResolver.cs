@@ -60,16 +60,19 @@ internal class AssemblyResolver(Func<CancellationToken, Task<String?>> _findCspr
 
         _watcher?.Dispose();
         _watchedAssetsPath = assetsPath;
-        _watcher = new FileSystemWatcher(
-            Path.GetDirectoryName(assetsPath)!, "project.assets.json")
+        _watcher = new FileSystemWatcher(Path.GetDirectoryName(assetsPath)!, "project.assets.json")
         {
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
-            EnableRaisingEvents = true
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName
         };
+
         _watcher.Changed += (_, _) => _dirty = true;
+        _watcher.Created += (_, _) => _dirty = true;
+        _watcher.Renamed += (_, _) => _dirty = true;
+
+        _watcher.EnableRaisingEvents = true;
     }
 
-    private static IReadOnlyList<string> ParseAssets(string assetsPath)
+    private static IReadOnlyList<String> ParseAssets(String assetsPath)
     {
         using var stream = File.OpenRead(assetsPath);
         using var doc = JsonDocument.Parse(stream);

@@ -11,7 +11,7 @@ internal class DocumentStore
 {
     private readonly ConcurrentDictionary<DocumentUri, String> _map = new();
 
-    public void Set(DocumentUri uri, string? text) => _map[uri] = text ?? String.Empty;
+    public void Set(DocumentUri uri, String? text) => _map[uri] = text ?? String.Empty;
 
     public void Remove(DocumentUri uri) => _map.TryRemove(uri, out _);
 
