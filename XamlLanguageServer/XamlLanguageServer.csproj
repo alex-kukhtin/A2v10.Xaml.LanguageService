@@ -8,5 +8,14 @@
 
 	<ItemGroup>
 		<PackageReference Include="OmniSharp.Extensions.LanguageServer" Version="0.19.9" />
+		<PackageReference Include="System.Reflection.MetadataLoadContext" Version="8.0.0" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<ProjectReference Include="..\XamlTolerantParser\XamlTolerantParser.csproj" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<InternalsVisibleTo Include="XamlLanguageServerTests" />
 	</ItemGroup>
 </Project>

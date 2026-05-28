@@ -2,7 +2,6 @@
 
 using System;
 using System.IO;
-using System.Threading;
 using System.Threading.Tasks;
 
 using Microsoft.Extensions.DependencyInjection;
@@ -12,12 +11,17 @@ using OmniSharp.Extensions.LanguageServer.Server;
 namespace XamlLanguageServer;
 
 // In-process LSP server. Lives for the lifetime of the OOP service host process —
-// when the host dies, the run-task, streams and OmniSharp instance go with it.
-// No Dispose: LanguageServerProvider exposes no restart hook, so this object is
-// created once per process and torn down only by process exit.
-public sealed class XamlLangServer(Func<CancellationToken, Task<String?>> findCsproj)
+// when the host dies, the run-task, streams and singletons (AssemblyResolver,
+// XamlContextProvider) go with it. No Dispose: LanguageServerProvider exposes no
+// restart hook, so this object is created once per process and torn down only by
+// process exit.
+public sealed class XamlLangServer
 {
-    private readonly AssemblyResolver _assemblyResolver = new(findCsproj);
+    private readonly AssemblyResolver _assemblyResolver = new();
+
+    public XamlLangServer()
+    {
+    }
 
     // Starts the run loop. The caller must NOT await the returned Task:
     // LanguageServer.From inside waits for "initialize" from VS, which only
@@ -35,12 +39,13 @@ public sealed class XamlLangServer(Func<CancellationToken, Task<String?>> findCs
             .WithServices(s =>
             {
                 s.AddSingleton<DocumentStore>()
-                 .AddSingleton(_assemblyResolver);
+                 .AddSingleton(_assemblyResolver)
+                 .AddSingleton<XamlContextProvider>();
             })
             .WithHandler<TextDocumentSyncHandler>()
             .WithHandler<CompletionHandler>());
 
         await server.WaitForExit;
-        _assemblyResolver?.Dispose();
+        _assemblyResolver.Dispose();
     }
 }

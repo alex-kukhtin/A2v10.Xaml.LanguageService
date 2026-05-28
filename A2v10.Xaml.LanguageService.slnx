@@ -8,4 +8,5 @@
   </Project>
   <Project Path="XamlTolerantParser/XamlTolerantParser.csproj" Id="e71d771c-20a1-473b-bf57-426a601631e5" />
   <Project Path="XamlTolerantParserTests/XamlTolerantParserTests.csproj" Id="73f4db48-199a-4592-8960-aee460dea9b2" />
+  <Project Path="XamlLanguageServerTests/XamlLanguageServerTests.csproj" />
 </Solution>

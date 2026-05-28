@@ -1,7 +1,5 @@
 // Copyright © 2026 Oleksandr Kukhtin. All rights reserved.
 
-using System;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Threading;
 using System.IO.Pipelines;
@@ -13,8 +11,6 @@ using Microsoft.VisualStudio.Extensibility.LanguageServer;
 using Microsoft.VisualStudio.RpcContracts.LanguageServerProvider;
 
 using Nerdbank.Streams;
-
-using Microsoft.VisualStudio.ProjectSystem.Query;
 
 using XamlLanguageServer;
 
@@ -46,20 +42,12 @@ internal class XamlLanguageServerProvider(ExtensionLog _log) : LanguageServerPro
     // The server is created once per provider lifetime and dies with the OOP host process.
     public override Task<IDuplexPipe?> CreateServerConnectionAsync(CancellationToken cancellationToken)
     {
-        var ws = Extensibility.Workspaces();
-
-        async Task<String?> FindCsProjAsync(CancellationToken ct)
-        {
-            var results = await ws.QueryProjectsAsync(p => p.With(p => p.Path), ct);
-            return results.FirstOrDefault()?.Path;
-        }
-
         _log.Log("CreateServerConnectionAsync — in-process OmniSharp LSP");
 
         // In-memory duplex channel: one half goes to VS, the other to the server.
         var (sdkSide, serverSide) = FullDuplexStream.CreatePair();
 
-        var server = new XamlLangServer(FindCsProjAsync);
+        var server = new XamlLangServer();
 
         // Do not await: LanguageServer.From inside waits for "initialize" from VS,
         // which only arrives after we return the pipe.

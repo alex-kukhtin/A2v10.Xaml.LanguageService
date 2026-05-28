@@ -1,6 +1,7 @@
-﻿// Copyright © 2026 Oleksandr Kukhtin. All rights reserved.
+// Copyright © 2026 Oleksandr Kukhtin. All rights reserved.
 
 using System;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -8,13 +9,19 @@ using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
 using OmniSharp.Extensions.LanguageServer.Protocol.Document;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 
+using XamlTolerantParser;
+
 namespace XamlLanguageServer;
 
-internal class CompletionHandler : ICompletionHandler
+internal class CompletionHandler(
+    DocumentStore _store,
+    XamlContextProvider _provider) : ICompletionHandler
 {
+    // Reference set of CompletionItemKind values — kept for future use when
+    // attribute / value / extension completions land. Not currently returned
+    // to the client.
     private static readonly CompletionList Items = new(
         [
-            // Kind drives the icon.
             new CompletionItem { Label = "TagText",          Kind = CompletionItemKind.Text,          Detail = "Xaml element" },
             new CompletionItem { Label = "TagMethod",        Kind = CompletionItemKind.Method,        Detail = "Xaml element" },
             new CompletionItem { Label = "TagFunction",      Kind = CompletionItemKind.Function,      Detail = "Xaml element" },
@@ -42,10 +49,34 @@ internal class CompletionHandler : ICompletionHandler
             new CompletionItem { Label = "TagTypeParameter", Kind = CompletionItemKind.TypeParameter, Detail = "Xaml element" },
         ]
     );
+
     public Task<CompletionList> Handle(CompletionParams request, CancellationToken ct)
     {
-        return Task.FromResult(Items);
+        var doc = _store.Get(request.TextDocument.Uri);
+        if (doc == null)
+            return Task.FromResult(new CompletionList());
+
+        var offset = new LineMap(doc.Source).ToOffset(
+            request.Position.Line, request.Position.Character);
+
+        var items = _provider.Complete(doc, offset)
+            .Select(e => new CompletionItem
+            {
+                Label = e.Label,
+                Kind = MapKind(e.Kind),
+                Detail = e.Detail,
+            })
+            .ToArray();
+        return Task.FromResult(new CompletionList(items));
     }
+
+    private static CompletionItemKind MapKind(XamlCompletionKind kind) => kind switch
+    {
+        XamlCompletionKind.Tag => CompletionItemKind.Class,
+        XamlCompletionKind.Attribute => CompletionItemKind.Property,
+        XamlCompletionKind.EnumValue => CompletionItemKind.EnumMember,
+        _ => CompletionItemKind.Text,
+    };
 
     public CompletionRegistrationOptions GetRegistrationOptions(
         CompletionCapability capability,

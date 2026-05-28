@@ -1,126 +1,126 @@
-﻿// Copyright © 2026 Oleksandr Kukhtin. All rights reserved.
+// Copyright © 2026 Oleksandr Kukhtin. All rights reserved.
 
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
-using System.Text.Json;
-using System.Threading;
-using System.Threading.Tasks;
+using System.Reflection;
+using System.Runtime.InteropServices;
 
 namespace XamlLanguageServer;
 
-internal class AssemblyResolver(Func<CancellationToken, Task<String?>> _findCsproj) : IDisposable
+// Server-lifetime singleton. Owns the MetadataLoadContext, discovers @assemblies
+// folders above open .vxaml files, and serves up each requested assembly wrapped
+// in XamlAssembly (which owns the namespace → type index).
+//
+// Convention: each project tree has a folder named "@assemblies" somewhere above
+// the .vxaml files; that folder contains the DLLs whose types the vxaml dialect
+// references (A2v10.Xaml + friends). The resolver walks up from a vxaml path once
+// per file to discover the folder; the discovered anchor (directory CONTAINING
+// the @assemblies folder) is remembered so future vxaml files in the same subtree
+// hit it via StartsWith without re-walking.
+//
+// MetadataLoadContext is reflection-only: no type initializers run, no file lock
+// on the DLLs (so the user can rebuild their A2v10.Xaml.dll without killing VS),
+// no AppDomain pollution.
+internal sealed class AssemblyResolver : MetadataAssemblyResolver, IDisposable
 {
-    private readonly SemaphoreSlim _lock = new(1, 1);
-    private volatile Boolean _dirty = true;
-    private FileSystemWatcher? _watcher;
-    private String? _watchedAssetsPath;
+    private const String FolderName = "@assemblies";
 
-    private IReadOnlyList<String>? _cache;
-    public void Dispose()
+    private readonly List<String> _anchors = [];   // dirs containing @assemblies
+    private readonly HashSet<String> _folders = new(StringComparer.OrdinalIgnoreCase); // @assemblies paths
+    private readonly Dictionary<String, XamlAssembly> _loaded =
+        new(StringComparer.OrdinalIgnoreCase);
+    private readonly MetadataLoadContext _context;
+    private readonly Object _lock = new();
+
+    public AssemblyResolver()
     {
-        _watcher?.Dispose();
-        _lock.Dispose();
-    }
-    public async Task<IReadOnlyList<String>> GetAssemblyPathsAsync(
-        String assemblyName, CancellationToken ct)
-    {
-        await _lock.WaitAsync(ct);
-        try
-        {
-            if (!_dirty && _cache is not null)
-                return _cache;
-
-            var csprojPath = await _findCsproj(ct);
-            if (csprojPath is null)
-                return [];
-
-            var assetsPath = Path.Combine(
-                Path.GetDirectoryName(csprojPath)!, "obj", "project.assets.json");
-
-            if (!File.Exists(assetsPath))
-                return [];
-
-            _cache = ParseAssets(assetsPath);
-            _dirty = false;
-            WatchAssets(assetsPath);
-
-            return _cache;
-        }
-        finally
-        {
-            _lock.Release();
-        }
-    }
-    private void WatchAssets(String assetsPath)
-    {
-        if (_watchedAssetsPath == assetsPath)
-            return;
-
-        _watcher?.Dispose();
-        _watchedAssetsPath = assetsPath;
-        _watcher = new FileSystemWatcher(Path.GetDirectoryName(assetsPath)!, "project.assets.json")
-        {
-            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size | NotifyFilters.FileName
-        };
-
-        _watcher.Changed += (_, _) => _dirty = true;
-        _watcher.Created += (_, _) => _dirty = true;
-        _watcher.Renamed += (_, _) => _dirty = true;
-
-        _watcher.EnableRaisingEvents = true;
+        _context = new MetadataLoadContext(this);
     }
 
-    private static IReadOnlyList<String> ParseAssets(String assetsPath)
+    // Called by MLC whenever it needs to find an assembly — both explicit
+    // LoadFromAssemblyName from GetAssembly and implicit cross-assembly refs.
+    // @assemblies wins over the runtime directory so a user DLL named like a
+    // system one would shadow it (rare but possible). The runtime-directory
+    // fallback is mandatory: MLC probes for "mscorlib" during construction and
+    // throws if no path comes back.
+    public override Assembly? Resolve(MetadataLoadContext context, AssemblyName name)
     {
-        using var stream = File.OpenRead(assetsPath);
-        using var doc = JsonDocument.Parse(stream);
-        var root = doc.RootElement;
+        var rd = RuntimeEnvironment.GetRuntimeDirectory();
 
-        var packageFolders = root.GetProperty("packageFolders")
-            .EnumerateObject()
-            .Select(p => p.Name)
-            .ToList();
-
-        var libraries = root.GetProperty("libraries");
-
-        // Take the first TFM from targets.
-        var targetPackages = root.GetProperty("targets")
-            .EnumerateObject()
-            .First()
-            .Value;
-
-        var dlls = new List<String>();
-
-        foreach (var pkg in targetPackages.EnumerateObject())
+        lock (_lock)
         {
-            if (!pkg.Value.TryGetProperty("compile", out var compile))
-                continue;
-
-            if (!libraries.TryGetProperty(pkg.Name, out var lib))
-                continue;
-
-            var libPath = lib.GetProperty("path").GetString()!;
-
-            foreach (var entry in compile.EnumerateObject())
+            foreach (var folder in _folders)
             {
-                var rel = entry.Name;
-                if (rel == "_._") continue;
+                var path = Path.Combine(folder, $"{name.Name}.dll");
+                if (File.Exists(path))
+                    return context.LoadFromAssemblyPath(path);
+            }
 
-                foreach (var folder in packageFolders)
-                {
-                    var full = Path.Combine(folder, libPath, rel)
-                        .Replace('/', Path.DirectorySeparatorChar);
-                    if (File.Exists(full))
-                    {
-                        dlls.Add(full);
-                        break;
-                    }
-                }
+            var rtPath = Path.Combine(rd, $"{name.Name}.dll");
+            if (File.Exists(rtPath))
+                return context.LoadFromAssemblyPath(rtPath);
+            return null;
+        }
+    }
+
+    // Ensures the @assemblies folder above this .vxaml file (if any) is registered.
+    // Idempotent and cheap: subsequent calls for files in the same subtree match an
+    // existing anchor via StartsWith and return without touching the filesystem.
+    public void EnsureFolderFor(String vxamlPath)
+    {
+        if (String.IsNullOrEmpty(vxamlPath))
+            return;
+        var full = Path.GetFullPath(vxamlPath);
+        lock (_lock)
+        {
+            foreach (var anchor in _anchors)
+                if (full.StartsWith(anchor, StringComparison.OrdinalIgnoreCase))
+                    return;
+
+            var found = FindAnchor(full);
+            if (found != null)
+            {
+                _anchors.Add(found);
+                _folders.Add(Path.Combine(found, FolderName));
             }
         }
+    }
 
-        return dlls;
+    // Loads an assembly by name and wraps it in XamlAssembly. Result is cached
+    // by assembly name. No negative caching: a miss leaves the cache untouched
+    // so a later EnsureFolderFor can succeed without invalidation.
+    public XamlAssembly? GetAssembly(String name)
+    {
+        lock (_lock)
+        {
+            if (_loaded.TryGetValue(name, out var existing))
+                return existing;
+            try
+            {
+                var asm = _context.LoadFromAssemblyName(new AssemblyName(name));
+                var wrapped = new XamlAssembly(asm);
+                _loaded[name] = wrapped;
+                return wrapped;
+            }
+            catch (FileNotFoundException)
+            {
+                return null;
+            }
+        }
+    }
+
+    public void Dispose() => _context.Dispose();
+
+    private static String? FindAnchor(String vxamlPath)
+    {
+        var dir = Path.GetDirectoryName(vxamlPath);
+        while (!String.IsNullOrEmpty(dir))
+        {
+            if (Directory.Exists(Path.Combine(dir, FolderName)))
+                return dir;
+            dir = Path.GetDirectoryName(dir);
+        }
+        return null;
     }
 }

@@ -30,7 +30,8 @@ public sealed class XamlParser
             HandleToken(tok);
         }
         FinalizeOpenElements();
-        return new XamlDocument(_roots, _diagnostics);
+        var (clr, lang, asms) = XmlnsExtraction.Extract(_roots, _source);
+        return new XamlDocument(_source, _roots, _diagnostics, clr, lang, asms);
     }
 
     void HandleToken(Token tok)
@@ -44,7 +45,12 @@ public sealed class XamlParser
                 ParseEndTag(tok);
                 break;
             case TokenKind.Content:
-                Add(new XamlText(tok.Span));
+                // Whitespace-only character data is dropped: it is noise for a language
+                // service (no completion / hover / diagnostic uses it) and triples the
+                // tree size on prettified files. Text with significant content is kept
+                // as-is, including any surrounding whitespace inside it.
+                if (!IsWhitespaceOnly(tok.Span))
+                    Add(new XamlText(tok.Span));
                 break;
             case TokenKind.Comment:
                 Add(new XamlComment(tok.Span));
@@ -251,4 +257,15 @@ public sealed class XamlParser
 
     string TextOf(TextSpan span) =>
         span.Length > 0 ? _source.Substring(span.Start, span.Length) : string.Empty;
+
+    bool IsWhitespaceOnly(TextSpan span)
+    {
+        for (int i = span.Start; i < span.End; i++)
+        {
+            var c = _source[i];
+            if (c != ' ' && c != '\t' && c != '\r' && c != '\n')
+                return false;
+        }
+        return true;
+    }
 }

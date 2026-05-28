@@ -1,4 +1,4 @@
-﻿// Copyright © 2026 Oleksandr Kukhtin. All rights reserved.
+// Copyright © 2026 Oleksandr Kukhtin. All rights reserved.
 
 using System.Linq;
 using System.Threading;
@@ -10,12 +10,17 @@ using OmniSharp.Extensions.LanguageServer.Protocol;
 using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
 using OmniSharp.Extensions.LanguageServer.Protocol.Document;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
+using OmniSharp.Extensions.LanguageServer.Protocol.Server;
 using OmniSharp.Extensions.LanguageServer.Protocol.Server.Capabilities;
 
+using XamlTolerantParser;
 
 namespace XamlLanguageServer;
 
-internal class TextDocumentSyncHandler(DocumentStore _store) : TextDocumentSyncHandlerBase
+internal class TextDocumentSyncHandler(
+    DocumentStore _store,
+    AssemblyResolver _resolver,
+    ILanguageServerFacade _server) : TextDocumentSyncHandlerBase
 {
     public override TextDocumentAttributes GetTextDocumentAttributes(DocumentUri uri)
         => new(uri, "vxaml");
@@ -26,13 +31,15 @@ internal class TextDocumentSyncHandler(DocumentStore _store) : TextDocumentSyncH
         {
             DocumentSelector = TextDocumentSelector.ForPattern("**/*.vxaml"),
             // Full: on every change VS sends the entire document text;
-            // we stash it in DocumentStore for other handlers to read.
+            // we reparse and stash the tree in DocumentStore.
             Change = TextDocumentSyncKind.Full,
         };
 
     public override Task<Unit> Handle(DidOpenTextDocumentParams r, CancellationToken ct)
     {
-        _store.Set(r.TextDocument.Uri, r.TextDocument.Text);
+        _resolver.EnsureFolderFor(r.TextDocument.Uri.GetFileSystemPath());
+        var doc = _store.Set(r.TextDocument.Uri, r.TextDocument.Text);
+        PublishDiagnostics(r.TextDocument.Uri, doc);
         return Unit.Task;
     }
 
@@ -41,15 +48,52 @@ internal class TextDocumentSyncHandler(DocumentStore _store) : TextDocumentSyncH
         // Full-sync: the single change carries the entire document text.
         var full = r.ContentChanges.LastOrDefault();
         if (full is not null)
-            _store.Set(r.TextDocument.Uri, full.Text);
+        {
+            _resolver.EnsureFolderFor(r.TextDocument.Uri.GetFileSystemPath());
+            var doc = _store.Set(r.TextDocument.Uri, full.Text);
+            PublishDiagnostics(r.TextDocument.Uri, doc);
+        }
         return Unit.Task;
     }
 
     public override Task<Unit> Handle(DidCloseTextDocumentParams r, CancellationToken ct)
     {
         _store.Remove(r.TextDocument.Uri);
+        // Clear stale markers in the client.
+        _server.TextDocument.PublishDiagnostics(new PublishDiagnosticsParams
+        {
+            Uri = r.TextDocument.Uri,
+            Diagnostics = new Container<Diagnostic>(),
+        });
         return Unit.Task;
     }
 
     public override Task<Unit> Handle(DidSaveTextDocumentParams r, CancellationToken ct) => Unit.Task;
+
+    private void PublishDiagnostics(DocumentUri uri, XamlDocument doc)
+    {
+        var map = new LineMap(doc.Source);
+        var diagnostics = doc.Diagnostics
+            .Select(d => new Diagnostic
+            {
+                Range = ToRange(map, d.Span),
+                Severity = DiagnosticSeverity.Error,
+                Source = "vxaml",
+                Message = d.Message,
+            })
+            .ToArray();
+
+        _server.TextDocument.PublishDiagnostics(new PublishDiagnosticsParams
+        {
+            Uri = uri,
+            Diagnostics = new Container<Diagnostic>(diagnostics),
+        });
+    }
+
+    private static Range ToRange(LineMap map, TextSpan span)
+    {
+        var (sl, sc) = map.ToLineColumn(span.Start);
+        var (el, ec) = map.ToLineColumn(span.End);
+        return new Range(sl, sc, el, ec);
+    }
 }
