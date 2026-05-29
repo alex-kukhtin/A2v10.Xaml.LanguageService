@@ -10,10 +10,10 @@ public abstract class XamlNode
         Span = span;
     }
 
-    // Returns the most specific node whose span contains offset.
-    // Precondition: this.Span.Contains(offset) — the caller has already narrowed.
+    // Returns the most specific node whose span contains (line, column).
+    // Precondition: this.Span.Contains(line, column) — the caller has already narrowed.
     // Leaves return themselves; composite nodes (element, attribute) override to descend.
-    public virtual XamlNode FindNodeAt(int offset) => this;
+    public virtual XamlNode FindNodeAt(int line, int column) => this;
 
     // Closest enclosing element walking strictly upwards (never returns `this`).
     // Useful when content rules (e.g. [ContentProperty] collection membership)

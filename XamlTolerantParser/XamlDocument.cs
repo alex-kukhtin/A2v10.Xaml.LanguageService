@@ -11,12 +11,17 @@ public sealed class XamlDocument
 
     // xmlns view of the document, extracted from root element attributes during Parse.
     // ClrPrefixes maps an xmlns prefix ("" for default) to the (assembly, CLR namespace)
-    // it provides. LanguagePrefixes lists prefixes bound to a http(s):// URL — they
+    // it provides. LanguagePrefixes lists prefixes bound to a http(s)://  URL — they
     // enable the XAML language attributes (Name, Key, Class, ...) on that prefix.
     // AssemblyNames is the unique set of assemblies referenced by ClrPrefixes.
     public IReadOnlyDictionary<String, (String asm, String ns)> ClrPrefixes { get; }
     public IReadOnlySet<String> LanguagePrefixes { get; }
     public String[] AssemblyNames { get; }
+
+    // Offsets of the start of every line. _lineStarts[k] is the offset of the
+    // first character of line k. Length == number of lines. Populated by the
+    // lexer in a single pass; OffsetAt indexes into it.
+    private readonly Int32[] _lineStarts;
 
     public XamlDocument(
         String source,
@@ -24,7 +29,8 @@ public sealed class XamlDocument
         IReadOnlyList<XamlDiagnostic> diagnostics,
         IReadOnlyDictionary<String, (String asm, String ns)> clrPrefixes,
         IReadOnlySet<String> languagePrefixes,
-        String[] assemblyNames)
+        String[] assemblyNames,
+        Int32[] lineStarts)
     {
         Source = source;
         Roots = roots;
@@ -32,16 +38,48 @@ public sealed class XamlDocument
         ClrPrefixes = clrPrefixes;
         LanguagePrefixes = languagePrefixes;
         AssemblyNames = assemblyNames;
+        _lineStarts = lineStarts;
     }
 
     public String TextOf(TextSpan span) =>
         span.Length > 0 ? Source.Substring(span.Start, span.Length) : String.Empty;
 
-    // Returns the most specific node whose span contains offset, or null if
-    // offset falls outside every root (typical for inter-root whitespace or EOF).
-    public XamlNode? FindNodeAt(Int32 offset)
+    // Returns the most specific node whose span contains (line, column), or null if
+    // the position falls outside every root (typical for inter-root whitespace or EOF).
+    public XamlNode? FindNodeAt(Int32 line, Int32 column)
     {
-        var i = SpanSearch.FindContaining(Roots, offset, static n => n.Span);
-        return i >= 0 ? Roots[i].FindNodeAt(offset) : null;
+        var i = SpanSearch.FindContaining(Roots, line, column, static n => n.Span);
+        return i >= 0 ? Roots[i].FindNodeAt(line, column) : null;
+    }
+
+    // Structural context for a cursor position — what is being edited
+    // (tag name, attribute, value, ...) plus the relevant parse-tree nodes.
+    // See XamlPositionContext for the full slot semantics.
+    public XamlPositionContext ContextAt(Int32 line, Int32 column) =>
+        XamlPositionClassifier.Classify(this, line, column);
+
+    // Converts an LSP (line, column) pair to a source offset. Clamped to document
+    // bounds. The line lookup is O(1) via the precomputed line-start table; the
+    // remaining work is a bounded scan of that single line to honour the lexer's
+    // column-counting rule (\r is swallowed, every other char counts as one column).
+    public Int32 OffsetAt(Int32 line, Int32 column)
+    {
+        if (line < 0 || (line == 0 && column < 0)) return 0;
+        var src = Source;
+        var len = src.Length;
+        if (line >= _lineStarts.Length) return len;
+
+        var lineStart = _lineStarts[line];
+        var lineEnd = line + 1 < _lineStarts.Length ? _lineStarts[line + 1] : len;
+
+        Int32 col = 0;
+        for (Int32 i = lineStart; i < lineEnd; i++)
+        {
+            if (col == column) return i;
+            var c = src[i];
+            if (c == '\n') return i; // end of line reached before requested column — clamp
+            if (c != '\r') col++;
+        }
+        return lineEnd;
     }
 }

@@ -12,7 +12,7 @@ public class XamlLexerTests
         var tokens = TokenizeAll("");
         Assert.Single(tokens);
         Assert.Equal(TokenKind.EndOfFile, tokens[0].Kind);
-        Assert.Equal(new TextSpan(0, 0), tokens[0].Span);
+        Assert.Equal(new TextSpan(0, 0, 0, 0, 0, 0), tokens[0].Span);
     }
 
     [Fact]
@@ -225,6 +225,42 @@ public class XamlLexerTests
         Assert.Equal(TokenKind.EndOfFile, lex.NextToken().Kind);
         Assert.Equal(TokenKind.EndOfFile, lex.NextToken().Kind);
         Assert.Equal(TokenKind.EndOfFile, lex.NextToken().Kind);
+    }
+
+    [Fact]
+    public void Token_carries_line_and_column_on_single_line()
+    {
+        const string src = "<Button/>";
+        var tokens = TokenizeAll(src);
+        var name = tokens[1];
+        Assert.Equal(TokenKind.ElementName, name.Kind);
+        Assert.Equal(0, name.Span.StartLine);
+        Assert.Equal(1, name.Span.StartColumn);
+        Assert.Equal(0, name.Span.EndLine);
+        Assert.Equal(7, name.Span.EndColumn);
+    }
+
+    [Fact]
+    public void Lf_advances_line_resets_column()
+    {
+        const string src = "<a>\n  <b/></a>";
+        var tokens = TokenizeAll(src);
+        var bName = System.Array.Find(tokens.ToArray(),
+            t => t.Kind == TokenKind.ElementName && t.TextOf(src) == "b");
+        Assert.Equal(1, bName.Span.StartLine);
+        Assert.Equal(3, bName.Span.StartColumn); // after "  <"
+    }
+
+    [Fact]
+    public void Crlf_is_a_single_line_break()
+    {
+        const string src = "<a>\r\n<b/></a>";
+        var tokens = TokenizeAll(src);
+        var bName = System.Array.Find(tokens.ToArray(),
+            t => t.Kind == TokenKind.ElementName && t.TextOf(src) == "b");
+        // \r is swallowed; \n drives the line break — 'b' is at line 1 col 1
+        Assert.Equal(1, bName.Span.StartLine);
+        Assert.Equal(1, bName.Span.StartColumn);
     }
 
     [Fact]

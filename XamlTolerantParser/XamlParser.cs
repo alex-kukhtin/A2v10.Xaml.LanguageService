@@ -22,16 +22,20 @@ public sealed class XamlParser
 
     XamlDocument ParseDocument()
     {
+        Token eofTok = default;
         while (true)
         {
             var tok = _lex.NextToken();
             if (tok.Kind == TokenKind.EndOfFile)
+            {
+                eofTok = tok;
                 break;
+            }
             HandleToken(tok);
         }
-        FinalizeOpenElements();
+        FinalizeOpenElements(eofTok.Span);
         var (clr, lang, asms) = XmlnsExtraction.Extract(_roots, _source);
-        return new XamlDocument(_source, _roots, _diagnostics, clr, lang, asms);
+        return new XamlDocument(_source, _roots, _diagnostics, clr, lang, asms, _lex.GetLineStarts());
     }
 
     void HandleToken(Token tok)
@@ -97,7 +101,7 @@ public sealed class XamlParser
 
         var elem = new XamlElement(name.Span)
         {
-            Span = new TextSpan(openTok.Span.Start, name.Span.End - openTok.Span.Start),
+            Span = TextSpan.FromTo(openTok.Span, name.Span),
         };
         Add(elem);
 
@@ -111,18 +115,18 @@ public sealed class XamlParser
                     break;
 
                 case TokenKind.TagClose:
-                    elem.Span = new TextSpan(elem.Span.Start, tok.Span.End - elem.Span.Start);
+                    elem.Span = TextSpan.FromTo(elem.Span, tok.Span);
                     _open.Push(elem);
                     return;
 
                 case TokenKind.SelfTagClose:
                     elem.IsSelfClosing = true;
-                    elem.Span = new TextSpan(elem.Span.Start, tok.Span.End - elem.Span.Start);
+                    elem.Span = TextSpan.FromTo(elem.Span, tok.Span);
                     return;
 
                 case TokenKind.EndOfFile:
                     _diagnostics.Add(new XamlDiagnostic(openTok.Span, "Unclosed tag."));
-                    elem.Span = new TextSpan(elem.Span.Start, _source.Length - elem.Span.Start);
+                    elem.Span = TextSpan.FromTo(elem.Span, tok.Span);
                     _lex.Back();
                     return;
 
@@ -130,14 +134,14 @@ public sealed class XamlParser
                     // The current tag never reached '>'. Close it as a sibling (no push to _open),
                     // then let the parser process the new tag.
                     _diagnostics.Add(new XamlDiagnostic(openTok.Span, "Tag is not closed."));
-                    elem.Span = new TextSpan(elem.Span.Start, tok.Span.Start - elem.Span.Start);
+                    elem.Span = TextSpan.FromToStart(elem.Span, tok.Span);
                     ParseStartTag(tok);
                     return;
 
                 case TokenKind.EndTagOpen:
                     // Same idea, but the next thing is somebody's close tag — let the document loop handle it.
                     _diagnostics.Add(new XamlDiagnostic(openTok.Span, "Tag is not closed."));
-                    elem.Span = new TextSpan(elem.Span.Start, tok.Span.Start - elem.Span.Start);
+                    elem.Span = TextSpan.FromToStart(elem.Span, tok.Span);
                     _lex.Back();
                     return;
 
@@ -171,23 +175,48 @@ public sealed class XamlParser
         {
             _diagnostics.Add(new XamlDiagnostic(next.Span, "Expected attribute value."));
             _lex.Back();
-            attr.Span = new TextSpan(nameTok.Span.Start, next.Span.End - nameTok.Span.Start);
+            attr.Span = TextSpan.FromTo(nameTok.Span, next.Span);
             return;
         }
 
         var value = MakeValue(valTok);
         value.Parent = attr;
         attr.Value = value;
-        attr.Span = new TextSpan(nameTok.Span.Start, valTok.Span.End - nameTok.Span.Start);
+        attr.Span = TextSpan.FromTo(nameTok.Span, valTok.Span);
     }
 
     XamlValue MakeValue(Token valTok)
     {
-        char quote = _source[valTok.Span.Start];
-        int contentStart = valTok.Span.Start + 1;
-        int contentEnd = valTok.IsUnterminated ? valTok.Span.End : valTok.Span.End - 1;
-        var contentSpan = new TextSpan(contentStart, contentEnd - contentStart);
-        return new XamlValue(valTok.Span, contentSpan, quote, valTok.IsUnterminated);
+        // The opening and closing quotes are single ASCII characters that
+        // cannot be newlines, so the content span is the token span shrunk
+        // by one column on each side (terminated case) or just on the left
+        // (unterminated — there is no closing quote to skip).
+        var s = valTok.Span;
+        char quote = _source[s.Start];
+
+        int contentStartOffset = s.Start + 1;
+        int contentStartLine = s.StartLine;
+        int contentStartCol = s.StartColumn + 1;
+
+        int contentEndOffset, contentEndLine, contentEndCol;
+        if (valTok.IsUnterminated)
+        {
+            contentEndOffset = s.End;
+            contentEndLine = s.EndLine;
+            contentEndCol = s.EndColumn;
+        }
+        else
+        {
+            contentEndOffset = s.End - 1;
+            contentEndLine = s.EndLine;
+            contentEndCol = s.EndColumn - 1;
+        }
+
+        var contentSpan = new TextSpan(
+            contentStartOffset, contentEndOffset - contentStartOffset,
+            contentStartLine, contentStartCol,
+            contentEndLine, contentEndCol);
+        return new XamlValue(s, contentSpan, quote, valTok.IsUnterminated);
     }
 
     void ParseEndTag(Token endTok)
@@ -201,16 +230,16 @@ public sealed class XamlParser
         }
 
         var close = _lex.NextToken();
-        int endOfCloseTag;
+        TextSpan endRef;
         if (close.Kind == TokenKind.TagClose)
         {
-            endOfCloseTag = close.Span.End;
+            endRef = close.Span;
         }
         else
         {
             _diagnostics.Add(new XamlDiagnostic(close.Span, "Expected '>' to close end tag."));
             _lex.Back();
-            endOfCloseTag = name.Span.End;
+            endRef = name.Span;
         }
 
         string nameText = TextOf(name.Span);
@@ -237,21 +266,21 @@ public sealed class XamlParser
         {
             var unclosed = _open.Pop();
             _diagnostics.Add(new XamlDiagnostic(unclosed.OpenNameSpan, "Unclosed tag."));
-            unclosed.Span = new TextSpan(unclosed.Span.Start, endTok.Span.Start - unclosed.Span.Start);
+            unclosed.Span = TextSpan.FromToStart(unclosed.Span, endTok.Span);
         }
 
         var matched = _open.Pop();
         matched.CloseNameSpan = name.Span;
-        matched.Span = new TextSpan(matched.Span.Start, endOfCloseTag - matched.Span.Start);
+        matched.Span = TextSpan.FromTo(matched.Span, endRef);
     }
 
-    void FinalizeOpenElements()
+    void FinalizeOpenElements(TextSpan eofSpan)
     {
         while (_open.Count > 0)
         {
             var unclosed = _open.Pop();
             _diagnostics.Add(new XamlDiagnostic(unclosed.OpenNameSpan, "Unclosed tag."));
-            unclosed.Span = new TextSpan(unclosed.Span.Start, _source.Length - unclosed.Span.Start);
+            unclosed.Span = TextSpan.FromTo(unclosed.Span, eofSpan);
         }
     }
 

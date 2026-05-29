@@ -8,95 +8,99 @@ public class FindNodeAtTests
 {
     private static XamlDocument Parse(string src) => XamlParser.Parse(src);
 
+    // All source strings in this file are single-line, so the column on line 0
+    // equals the legacy offset. Multi-line cases need an explicit (line, col).
+    private static XamlNode? At(XamlDocument doc, int column) => doc.FindNodeAt(0, column);
+
     [Fact]
     public void Empty_document_returns_null()
     {
         var doc = Parse("");
-        Assert.Null(doc.FindNodeAt(0));
+        Assert.Null(At(doc, 0));
     }
 
     [Fact]
     public void Leading_whitespace_yields_no_node()
     {
-        // Whitespace-only character data is dropped by the parser, so an offset
+        // Whitespace-only character data is dropped by the parser, so a position
         // before the first real root falls outside every node.
         const string src = "  <a/>";
         var doc = Parse(src);
-        Assert.Null(doc.FindNodeAt(0));
-        Assert.Null(doc.FindNodeAt(1));
+        Assert.Null(At(doc, 0));
+        Assert.Null(At(doc, 1));
     }
 
     [Fact]
-    public void Offset_past_eof_returns_null()
+    public void Position_past_eof_returns_null()
     {
         const string src = "<a/>";
         var doc = Parse(src);
-        Assert.Null(doc.FindNodeAt(src.Length));
+        Assert.Null(At(doc, src.Length));
     }
 
     [Fact]
-    public void Offset_in_element_name_returns_element()
+    public void Position_in_element_name_returns_element()
     {
         //                  0123456789
         const string src = "<Button/>";
         var doc = Parse(src);
-        var node = doc.FindNodeAt(3); // inside "Button"
+        var node = At(doc, 3); // inside "Button"
         Assert.IsType<XamlElement>(node);
         Assert.Same(doc.Roots[0], node);
     }
 
     [Fact]
-    public void Offset_on_opening_bracket_returns_element()
+    public void Position_on_opening_bracket_returns_element()
     {
         const string src = "<Button/>";
         var doc = Parse(src);
-        Assert.IsType<XamlElement>(doc.FindNodeAt(0));
+        Assert.IsType<XamlElement>(At(doc, 0));
     }
 
     [Fact]
-    public void Offset_in_attribute_name_returns_attribute()
+    public void Position_in_attribute_name_returns_attribute()
     {
         //                  0         1         2
         //                  0123456789012345678901
         const string src = "<a Width=\"100\"/>";
         var doc = Parse(src);
-        var node = doc.FindNodeAt(4); // inside "Width"
+        var node = At(doc, 4); // inside "Width"
         var attr = Assert.IsType<XamlAttribute>(node);
         Assert.Same(((XamlElement)doc.Roots[0]).Attributes[0], attr);
     }
 
     [Fact]
-    public void Offset_in_attribute_value_returns_value()
+    public void Position_in_attribute_value_returns_value()
     {
         //                  0         1
         //                  0123456789012345
         const string src = "<a Width=\"100\"/>";
         var doc = Parse(src);
-        var node = doc.FindNodeAt(11); // inside "100"
+        var node = At(doc, 11); // inside "100"
         var value = Assert.IsType<XamlValue>(node);
         Assert.Same(((XamlElement)doc.Roots[0]).Attributes[0].Value, value);
     }
 
     [Fact]
-    public void Offset_on_quote_returns_value()
+    public void Position_on_quote_returns_value()
     {
         //                  0         1
         //                  0123456789012345
         const string src = "<a Width=\"100\"/>";
         var doc = Parse(src);
-        // index 9 is the opening quote — still part of value span [9, 14)
-        var node = doc.FindNodeAt(9);
+        // column 9 is the opening quote — still part of value span [9, 14)
+        var node = At(doc, 9);
         Assert.IsType<XamlValue>(node);
     }
 
     [Fact]
-    public void Offset_on_equals_returns_attribute()
+    public void Position_on_equals_returns_attribute()
     {
         //                  0         1
         //                  0123456789012345
         const string src = "<a Width=\"100\"/>";
         var doc = Parse(src);
-        var node = doc.FindNodeAt(8); // '='
+        var node = At(doc, 8); // '='
         Assert.IsType<XamlAttribute>(node);
     }
 
@@ -107,7 +111,7 @@ public class FindNodeAtTests
         //                  01234567890123456789012
         const string src = "<a x=\"1\"  y=\"2\"/>";
         var doc = Parse(src);
-        var node = doc.FindNodeAt(8); // first of two spaces between attrs
+        var node = At(doc, 8); // first of two spaces between attrs
         Assert.IsType<XamlElement>(node);
     }
 
@@ -118,44 +122,44 @@ public class FindNodeAtTests
         //                  01234567890123456789012
         const string src = "<a><b/>   <c/></a>";
         var doc = Parse(src);
-        var node = doc.FindNodeAt(8); // inside the "   " between siblings
+        var node = At(doc, 8); // inside the "   " between siblings
         var elem = Assert.IsType<XamlElement>(node);
         Assert.Same(doc.Roots[0], elem); // <a> — there is no text child for the whitespace
     }
 
     [Fact]
-    public void Offset_in_text_content_returns_text_node()
+    public void Position_in_text_content_returns_text_node()
     {
         //                  0         1
         //                  012345678901
         const string src = "<a>hello</a>";
         var doc = Parse(src);
-        var node = doc.FindNodeAt(5); // inside "hello"
+        var node = At(doc, 5); // inside "hello"
         Assert.IsType<XamlText>(node);
     }
 
     [Fact]
-    public void Offset_in_comment_returns_comment_node()
+    public void Position_in_comment_returns_comment_node()
     {
         //                  0         1
         //                  0123456789012345
         const string src = "<a><!-- hi --></a>";
         var doc = Parse(src);
-        var node = doc.FindNodeAt(8); // inside the comment
+        var node = At(doc, 8); // inside the comment
         Assert.IsType<XamlComment>(node);
     }
 
     [Fact]
-    public void Offset_in_cdata_returns_cdata_node()
+    public void Position_in_cdata_returns_cdata_node()
     {
         const string src = "<a><![CDATA[x<y]]></a>";
         var doc = Parse(src);
-        var node = doc.FindNodeAt(13); // inside the cdata content
+        var node = At(doc, 13); // inside the cdata content
         Assert.IsType<XamlCData>(node);
     }
 
     [Fact]
-    public void Deeply_nested_offset_returns_innermost()
+    public void Deeply_nested_position_returns_innermost()
     {
         const string src = "<a><b><c x=\"1\"/></b></a>";
         var doc = Parse(src);
@@ -166,23 +170,23 @@ public class FindNodeAtTests
         var x = c.Attributes.Single();
 
         // inside "1"
-        var hit = doc.FindNodeAt(src.IndexOf('1'));
+        var hit = At(doc, src.IndexOf('1'));
         Assert.Same(x.Value, hit);
 
         // inside "c"
-        var cName = doc.FindNodeAt(src.IndexOf('c'));
+        var cName = At(doc, src.IndexOf('c'));
         Assert.Same(c, cName);
     }
 
     [Fact]
-    public void Offset_at_exact_end_of_one_sibling_is_in_the_next()
+    public void Position_at_exact_end_of_one_sibling_is_in_the_next()
     {
         //                  0         1
         //                  0123456789012345
         const string src = "<a/><b/>";
         var doc = Parse(src);
-        // <a/> spans [0,4); <b/> spans [4,8). Offset 4 is in <b/>.
-        var node = doc.FindNodeAt(4);
+        // <a/> spans [0,4); <b/> spans [4,8). Column 4 is in <b/>.
+        var node = At(doc, 4);
         var elem = Assert.IsType<XamlElement>(node);
         Assert.Same(doc.Roots[1], elem);
     }
@@ -191,14 +195,14 @@ public class FindNodeAtTests
     public void Recovery_unclosed_tag_finds_inner_node()
     {
         // <a><b> — <b> is unclosed; both <a> and <b> spans extend to EOF.
-        // Offset on 'b' should still return the most specific element (<b>).
+        // Position on 'b' should still return the most specific element (<b>).
         const string src = "<a><b>";
         var doc = Parse(src);
         var a = (XamlElement)doc.Roots[0];
         var b = (XamlElement)a.Children.Single();
 
-        Assert.Same(b, doc.FindNodeAt(4)); // 'b'
-        Assert.Same(a, doc.FindNodeAt(1)); // 'a'
+        Assert.Same(b, At(doc, 4)); // 'b'
+        Assert.Same(a, At(doc, 1)); // 'a'
     }
 
     [Fact]
@@ -212,28 +216,42 @@ public class FindNodeAtTests
         var root = (XamlElement)doc.Roots[0];
         var target = root.Children.OfType<XamlElement>().First(e => doc.TextOf(e.OpenNameSpan) == "n37");
 
-        // pick an offset inside the target's name
-        var nameOffset = target.OpenNameSpan.Start + 1;
-        Assert.Same(target, doc.FindNodeAt(nameOffset));
+        // pick a column inside the target's name (single-line source → col == offset)
+        var col = target.OpenNameSpan.StartColumn + 1;
+        Assert.Same(target, At(doc, col));
     }
 
     [Fact]
-    public void Offset_in_inter_root_whitespace_returns_null()
+    public void Position_in_inter_root_whitespace_returns_null()
     {
         //                  0         1
         //                  0123456789012345
         const string src = "<a/>   <b/>";
         var doc = Parse(src);
         // Roots: <a/> and <b/> only — whitespace between them is dropped.
-        Assert.Null(doc.FindNodeAt(5));
+        Assert.Null(At(doc, 5));
     }
 
     [Fact]
-    public void Offset_truly_past_eof_returns_null()
+    public void Position_truly_past_eof_returns_null()
     {
         const string src = "<a/>";
         var doc = Parse(src);
-        Assert.Null(doc.FindNodeAt(src.Length + 10));
-        Assert.Null(doc.FindNodeAt(src.Length));
+        Assert.Null(At(doc, src.Length + 10));
+        Assert.Null(At(doc, src.Length));
+    }
+
+    [Fact]
+    public void Multiline_position_descends_into_child_on_second_line()
+    {
+        const string src = "<a>\n  <b/>\n</a>";
+        var doc = Parse(src);
+        var a = (XamlElement)doc.Roots[0];
+        var b = (XamlElement)a.Children.OfType<XamlElement>().Single();
+
+        // (1, 3) is inside "b" name of "  <b/>"
+        Assert.Same(b, doc.FindNodeAt(1, 3));
+        // (1, 1) is inside the leading whitespace — falls back to <a>
+        Assert.Same(a, doc.FindNodeAt(1, 1));
     }
 }

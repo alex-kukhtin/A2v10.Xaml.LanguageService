@@ -79,30 +79,41 @@ internal static class XmlnsExtraction
         return false;
     }
 
+    // No whitespace is significant inside an xmlns clr-namespace value — strip
+    // it all, then parse with simple StartsWith / IndexOf. This tolerates spaces
+    // around `:`, `;`, `=` as well as inside identifiers (the latter shouldn't
+    // happen in practice but is harmless to collapse).
     private static Boolean TryParseClr(String value, out String assemblyName, out String clrNamespace)
     {
         assemblyName = String.Empty;
         clrNamespace = String.Empty;
+
+        value = StripWhitespace(value);
 
         if (!value.StartsWith(ClrNamespacePrefix, StringComparison.Ordinal))
             return false;
 
         var rest = value.Substring(ClrNamespacePrefix.Length);
         var semi = rest.IndexOf(';');
-        if (semi < 0)
-            return false;
+        if (semi < 0) return false;
 
-        var ns = rest.Substring(0, semi).Trim();
-        var tail = rest.Substring(semi + 1).Trim();
-        if (!tail.StartsWith(AssemblyEquals, StringComparison.Ordinal))
-            return false;
+        var ns = rest.Substring(0, semi);
+        var tail = rest.Substring(semi + 1);
+        if (!tail.StartsWith(AssemblyEquals, StringComparison.Ordinal)) return false;
 
-        var asm = tail.Substring(AssemblyEquals.Length).Trim();
-        if (ns.Length == 0 || asm.Length == 0)
-            return false;
+        var asm = tail.Substring(AssemblyEquals.Length);
+        if (ns.Length == 0 || asm.Length == 0) return false;
 
         clrNamespace = ns;
         assemblyName = asm;
         return true;
+    }
+
+    private static String StripWhitespace(String s)
+    {
+        var sb = new System.Text.StringBuilder(s.Length);
+        foreach (var c in s)
+            if (!Char.IsWhiteSpace(c)) sb.Append(c);
+        return sb.ToString();
     }
 }

@@ -15,9 +15,9 @@ public sealed class XamlAttribute : XamlNode
         NameSpan = nameSpan;
     }
 
-    public override XamlNode FindNodeAt(int offset)
+    public override XamlNode FindNodeAt(int line, int column)
     {
-        if (Value is { } v && v.Span.Contains(offset))
+        if (Value is { } v && v.Span.Contains(line, column))
             return v;
         return this;
     }

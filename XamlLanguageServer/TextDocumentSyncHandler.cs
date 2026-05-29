@@ -32,7 +32,7 @@ internal class TextDocumentSyncHandler(
             DocumentSelector = TextDocumentSelector.ForPattern("**/*.vxaml"),
             // Full: on every change VS sends the entire document text;
             // we reparse and stash the tree in DocumentStore.
-            Change = TextDocumentSyncKind.Full,
+            Change = TextDocumentSyncKind.Full
         };
 
     public override Task<Unit> Handle(DidOpenTextDocumentParams r, CancellationToken ct)
@@ -72,11 +72,10 @@ internal class TextDocumentSyncHandler(
 
     private void PublishDiagnostics(DocumentUri uri, XamlDocument doc)
     {
-        var map = new LineMap(doc.Source);
         var diagnostics = doc.Diagnostics
             .Select(d => new Diagnostic
             {
-                Range = ToRange(map, d.Span),
+                Range = ToRange(d.Span),
                 Severity = DiagnosticSeverity.Error,
                 Source = "vxaml",
                 Message = d.Message,
@@ -90,10 +89,6 @@ internal class TextDocumentSyncHandler(
         });
     }
 
-    private static Range ToRange(LineMap map, TextSpan span)
-    {
-        var (sl, sc) = map.ToLineColumn(span.Start);
-        var (el, ec) = map.ToLineColumn(span.End);
-        return new Range(sl, sc, el, ec);
-    }
+    private static Range ToRange(TextSpan span) =>
+        new(span.StartLine, span.StartColumn, span.EndLine, span.EndColumn);
 }

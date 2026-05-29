@@ -33,13 +33,16 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
         }
     }
 
-    // The single position-aware entry point. Classifies the offset (value slot
+    // The single position-aware entry point. Classifies the cursor (value slot
     // → enum values; attribute-name slot inside an open tag → properties of
     // the element; tag-name slot → root tags) and returns the corresponding
-    // entries. Empty list = nothing to suggest.
-    public IReadOnlyList<XamlCompletionEntry> Complete(XamlDocument doc, Int32 offset)
+    // entries. Empty list = nothing to suggest. Position is LSP-shaped
+    // (0-based line, 0-based UTF-16 column).
+    public IReadOnlyList<XamlCompletionEntry> Complete(XamlDocument doc, Int32 line, Int32 column)
     {
-        var node = doc.FindNodeAt(offset);
+        var node = doc.FindNodeAt(line, column);
+        // Forward / backward source scans below still need an offset; compute once.
+        var offset = doc.OffsetAt(line, column);
 
         // 1. Attribute value — enum members only (no metadata for arbitrary
         //    string / numeric / type-converter properties yet).

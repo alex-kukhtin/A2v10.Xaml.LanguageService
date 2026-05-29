@@ -41,7 +41,9 @@ Goal: WPF-level IntelliSense — completion, diagnostics, hover, go-to-definitio
 - **`ITextViewTaggerProvider` / `ClassificationTag`** — classic MEF API, unavailable in the new VS Extensibility model without a hybrid VSIX.
 - **Inheriting `.vxaml` from XML document type** — `DocumentTypeConfiguration.BaseDocumentType` is singular; setting it to XML breaks LSP.
 
-**Root cause of all three:** the new VS Extensibility model is isolated from the classic in-process editor infrastructure. TextMate grammar is the bypass.
+**Root cause of the three above:** the new VS Extensibility model is isolated from the classic in-process editor infrastructure. TextMate grammar is the bypass.
+
+- **Incremental parsing / `TextDocumentSyncKind.Incremental`** — vxaml documents are 100-200 lines typically, 1000 lines exceptional. A full reparse of a 50 KB file by the hand-written lexer (zero allocations, all spans are structs over the same source) takes ~100 µs–1 ms. Per-keystroke that is ≤10 ms/sec of CPU on the worst file we'll ever see — well below the noise floor on a budget dominated by assembly reflection, JSON, and VS rendering. Going incremental costs Roslyn-tier infrastructure (red-green tree or equivalent) to make position-offset updates after a splice cheap; the implementation is ~2000 lines of subtle code for a win that won't be measurable. `TextDocumentSyncKind.Incremental` separately would save nothing: the transport is the in-process `Nerdbank.Streams.FullDuplexStream` (memory copy, no network), and applying the delta still allocates a fresh full-length string. The two are independent — and neither is justified at our sizes.
 
 ---
 
@@ -97,22 +99,28 @@ The runtime-directory fallback is required: the `MetadataLoadContext` constructo
 
 ---
 
-## Position representation — line/column native, no offsets
+## Position representation — both offset and line/column
 
-**Spans in the parse tree must carry `(line, column)` directly, not character offsets.** The lexer walks the source character by character and already sees every `\n` — tracking line/column at that point is free.
+**`TextSpan` carries six fields**: `Start`, `Length` (offset arithmetic, for cheap `Source.Substring`) and `StartLine`, `StartColumn`, `EndLine`, `EndColumn` (LSP-shaped, 0-based, UTF-16 code units per column). The lexer walks the source character by character and tracks both in one pass.
 
-Why this matters:
-- LSP delivers `Position` as `(line, character)`. Storing offsets forces every request to convert both ways.
-- The original parser scanned positions as integer offsets and the server reconstructs a `LineMap` on every request to translate. That's **two passes over the source where one suffices** — lex once, emit positions in the shape the protocol already uses.
-- `LineMap` exists only as a band-aid for the wrong span shape. With native line/column it is deleted; with it goes `LineMap.ToOffset` / `ToLineColumn` and the offset arithmetic in `TextDocumentSyncHandler` and `CompletionHandler`.
+Why both:
+- LSP delivers `Position` as `(line, character)`. Storing only offsets forces every request to convert both ways.
+- But some semantic logic (forward / backward source scans, substring extraction) inherently wants offsets. Carrying both means each consumer picks the cheaper axis with no `LineMap` round-trip.
+- `LineMap` is deleted. The few places that still need an offset from an LSP position call `XamlDocument.OffsetAt(line, column)` (a one-shot linear scan over `Source`).
 
-What the refactor touches:
-- `TextSpan` → `(startLine, startColumn, endLine, endColumn)`. No `Length` int; if substring extraction is needed, `XamlDocument.TextOf(span)` does the line walk in one place.
-- `XamlLexer` carries `int _line, _column`, snapshots them on token emission, increments on `\n`.
-- `XamlDocument.FindNodeAt` takes `(line, column)`.
-- Handlers pass `request.Position.Line, request.Position.Character` straight in; no `LineMap` involved.
+What the lexer does:
+- Carries `int _line, _column`; snapshots them at every token start.
+- On `\n`: `_line++`, `_column = 0`. `\r` is swallowed (no column change, no line change) — so CRLF behaves as a single break via `\n`, and lone `\r` is treated as a no-op. Files come from VS editors, where lone `\r` does not occur in practice.
+- `Eof()` emits a zero-length span at the current `(_pos, _line, _column)` — the parser uses this to size unclosed elements out to EOF without consulting `_source.Length` separately.
 
-Do not preserve offset spans "for compatibility" — every consumer (parser, server, tests) is in this repo and gets migrated atomically.
+What `XamlDocument` exposes:
+- `FindNodeAt(int line, int column)` — line/column only. No offset overload; add one back when a consumer actually needs it.
+- `OffsetAt(int line, int column)` — linear scan, used by source-scanning code in `XamlContextProvider`.
+- `TextOf(TextSpan)` — substring via offsets.
+
+Span composition helpers on `TextSpan`:
+- `FromTo(from, to)` — merge from `from.Start*` to `to.End*`.
+- `FromToStart(from, to)` — extend `from` up to (not including) `to.Start*`. Used in recovery (close an unclosed tag at the start of the next sibling).
 
 ---
 

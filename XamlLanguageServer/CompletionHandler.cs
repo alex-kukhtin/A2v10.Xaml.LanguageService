@@ -56,10 +56,7 @@ internal class CompletionHandler(
         if (doc == null)
             return Task.FromResult(new CompletionList());
 
-        var offset = new LineMap(doc.Source).ToOffset(
-            request.Position.Line, request.Position.Character);
-
-        var items = _provider.Complete(doc, offset)
+        var items = _provider.Complete(doc, request.Position.Line, request.Position.Character)
             .Select(e => new CompletionItem
             {
                 Label = e.Label,

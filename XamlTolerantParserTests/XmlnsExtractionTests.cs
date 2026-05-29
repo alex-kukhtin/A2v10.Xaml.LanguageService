@@ -152,4 +152,63 @@ public class XmlnsExtractionTests
         Assert.Empty(d.ClrPrefixes);
         Assert.Empty(d.LanguagePrefixes);
     }
+
+    // ---- whitespace tolerance in clr-namespace value ----
+
+    [Fact]
+    public void Whitespace_around_colon_is_tolerated()
+    {
+        var d = Parse("<Root xmlns=\"clr-namespace  :  A2v10.Xaml;assembly=A2v10.Xaml\"/>");
+        Assert.Equal(("A2v10.Xaml", "A2v10.Xaml"), d.ClrPrefixes[""]);
+    }
+
+    [Fact]
+    public void Whitespace_around_equals_is_tolerated()
+    {
+        var d = Parse("<Root xmlns=\"clr-namespace:A2v10.Xaml;assembly = A2v10.Xaml\"/>");
+        Assert.Equal(("A2v10.Xaml", "A2v10.Xaml"), d.ClrPrefixes[""]);
+    }
+
+    [Fact]
+    public void Whitespace_around_semicolon_is_tolerated()
+    {
+        var d = Parse("<Root xmlns=\"clr-namespace:A2v10.Xaml   ;   assembly=A2v10.Xaml\"/>");
+        Assert.Equal(("A2v10.Xaml", "A2v10.Xaml"), d.ClrPrefixes[""]);
+    }
+
+    [Fact]
+    public void Whitespace_everywhere_is_tolerated()
+    {
+        var d = Parse("<Root xmlns=\"clr-namespace    :     A2v10.Xaml   ;   assembly = A2v10.Xaml\"/>");
+        Assert.Equal(("A2v10.Xaml", "A2v10.Xaml"), d.ClrPrefixes[""]);
+    }
+
+    [Fact]
+    public void Trailing_whitespace_is_tolerated()
+    {
+        var d = Parse("<Root xmlns=\"clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml   \"/>");
+        Assert.Equal(("A2v10.Xaml", "A2v10.Xaml"), d.ClrPrefixes[""]);
+    }
+
+    [Fact]
+    public void Internal_whitespace_inside_namespace_is_collapsed()
+    {
+        // Whitespace anywhere in the value is stripped before parsing.
+        var d = Parse("<Root xmlns=\"clr-namespace:A2v10 .Xaml;assembly=A2v10.Xaml\"/>");
+        Assert.Equal(("A2v10.Xaml", "A2v10.Xaml"), d.ClrPrefixes[""]);
+    }
+
+    [Fact]
+    public void Internal_whitespace_inside_assembly_is_collapsed()
+    {
+        var d = Parse("<Root xmlns=\"clr-namespace:A2v10.Xaml;assembly=A2v10 .Xaml\"/>");
+        Assert.Equal(("A2v10.Xaml", "A2v10.Xaml"), d.ClrPrefixes[""]);
+    }
+
+    [Fact]
+    public void Missing_assembly_keyword_after_semicolon_is_rejected()
+    {
+        var d = Parse("<Root xmlns=\"clr-namespace:Foo;A2v10.Xaml\"/>");
+        Assert.Empty(d.ClrPrefixes);
+    }
 }
