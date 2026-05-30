@@ -13,8 +13,8 @@ Goal: WPF-level IntelliSense — completion, diagnostics, hover, go-to-definitio
 |---|---|
 | `XamlServiceExtension` | VSIX entry point. VS Extensibility SDK 17.14. Hosts the LSP server in-process. |
 | `XamlLanguageServer` | LSP server library. OmniSharp. Handlers, resolvers, document store. |
-| `XamlTolerantParser` | Lexer, parser, document model, xmlns extraction, `LineMap`, `FindNodeAt`. No VS / no LSP / no I/O dependencies. Pure CLR over source text. |
-| `XamlTolerantParserTests` | xUnit tests for parser, xmlns extraction, line map, find-node-at. |
+| `XamlTolerantParser` | Lexer, parser, document model, xmlns extraction, `FindNodeAt`, `ContextAt`, `EditAt`. No VS / no LSP / no I/O dependencies. Pure CLR over source text. |
+| `XamlTolerantParserTests` | xUnit tests for parser, xmlns extraction, find-node-at, position classification (`ContextAt`), on-type edits (`EditAt`). |
 
 ---
 
@@ -32,6 +32,7 @@ Goal: WPF-level IntelliSense — completion, diagnostics, hover, go-to-definitio
 - Framework: `OmniSharp.Extensions.LanguageServer`.
 - Why in-process: in VS Extensibility (out-of-process model), `AppContext.BaseDirectory` points to the VS ServiceHub host — impossible to locate a sibling exe. In-process also enables F5 debugging of the server.
 - `StartAsync` must be called **fire-and-forget** — `LanguageServer.From` waits for `initialize` from VS, which only arrives after the pipe is returned. Awaiting it causes a deadlock.
+- **VS 2026 client capabilities are recorded** in a comment block above `XamlLangServer` (probed once by dumping `ClientCapabilities` at `initialize`). Facts that shape feature work: completion `SnippetSupport` / `CommitCharactersSupport` / `ContextSupport` / `InsertReplaceSupport` are all **false** (⇒ no trigger character in the request — dispatch off `ContextAt`; plain single-range `TextEdit`s only), hover is **plaintext-only**, push diagnostics are span+message only, and VS exposes the proprietary `_vs_onAutoInsert` and `LinkedEditingRange`. Re-probe if VS changes; see [memory: VS 2026 client capabilities](/.claude/memory/project_vs2026_client_capabilities.md).
 
 ---
 
@@ -85,7 +86,7 @@ The runtime-directory fallback is required: the `MetadataLoadContext` constructo
   - The `\}` / `\\` escapes that the XAML markup-extension grammar formally supports are **not** implemented. They are vanishingly rare in vxaml; `\` inside a string value parses as a literal character. Add a `\`-escape branch in `MarkupExtensionParser.ParseValue` if a real use case appears.
 - Every node has `Parent` set (root nodes have `Parent == null`). `XamlValue.Parent` is its `XamlAttribute`; an extension's parent chain walks back through any number of nested-extension layers to the `XamlAttribute` (see `XamlPositionClassifier.FindOwningAttribute`).
 - Span invariant: a parent's `Span` always contains the spans of its attributes, values, children, and (when present) extension subtree (asserted by `Span_of_every_node_contains_spans_of_its_children`).
-- Recovery covered: unclosed tags at EOF, mismatched close tags, inner unclosed tags closed by outer, stray `<` mid-tag, unterminated attribute values, unterminated comments/CDATA, broken sibling not poisoning later good siblings, plus all the markup-extension tolerance cases above. 181 tests in `XamlTolerantParserTests`.
+- Recovery covered: unclosed tags at EOF, mismatched close tags, inner unclosed tags closed by outer, stray `<` mid-tag, unterminated attribute values, unterminated comments/CDATA, broken sibling not poisoning later good siblings, plus all the markup-extension tolerance cases above. 202 tests in `XamlTolerantParserTests` (parser recovery + `ContextAt` + `EditAt`).
 
 - `XamlDocument` carries `Source` (the original string) and offers `TextOf(TextSpan)` — consumers substring by span without threading the source through every call.
 - **`XamlDocument` also carries xmlns view of the document**, computed inline by `XmlnsExtraction` during `XamlParser.Parse`:
@@ -129,13 +130,22 @@ Span composition helpers on `TextSpan`:
 
 ## Position classification
 
-`XamlDocument.ContextAt(line, column) → XamlPositionContext` classifies a cursor position into a structural variant that completion / hover / diagnostics dispatch on. Implemented by `XamlPositionClassifier`. The contexts are a discriminated union of records (`OutsideContext`, `TagNameContext`, `EndTagNameContext`, `TagInteriorContext`, `AttributeNameContext`, `AttributeValueContext`, `ElementContentContext`, `TextContext`, `CommentContext`, `CDataContext`, plus the markup-extension family `ExtensionTypeNameContext`, `ExtensionInteriorContext`, `ExtensionArgNameContext`, `ExtensionArgValueContext`). Every variant carries the filtered list of diagnostics whose spans contain the cursor — handlers don't refilter.
+`XamlDocument.ContextAt(line, column) → XamlPositionContext` classifies a cursor position into a structural variant that completion / hover / diagnostics dispatch on. Implemented by `XamlPositionClassifier`. The contexts are a discriminated union of records (`OutsideContext`, `TagNameContext`, `ChildTagNameContext`, `EndTagNameContext`, `TagInteriorContext`, `AttributeNameContext`, `AttributeValueContext`, `ElementContentContext`, `TextContext`, `CommentContext`, `CDataContext`, plus the markup-extension family `ExtensionTypeNameContext`, `ExtensionInteriorContext`, `ExtensionArgNameContext`, `ExtensionArgValueContext`). Every variant carries the filtered list of diagnostics whose spans contain the cursor — handlers don't refilter.
+
+**Tag-name scope is split into two variants, never one with a nullable container.** Element-name completion lives in a clean 2×2 (scope × whether `<` was typed):
+
+| | content (no `<` yet) | tag name (`<` typed) |
+|---|---|---|
+| **root scope** | `OutsideContext` | `TagNameContext` (Element?) |
+| **child scope** | `ElementContentContext` (Element) | `ChildTagNameContext` (Element?, **Container**) |
+
+`TagNameContext` is root-only and carries **no** container. `ChildTagNameContext.Container` is **non-nullable** — a child always has one. The root-vs-child decision is baked into the type by the classifier, so consumers (`XamlContextProvider.Complete`) dispatch with no guard clauses. The container is derived from the element the `<` sits inside (the partial tag's `OwnerElement`, or the enclosing element when no partial node exists yet, e.g. `<a><|`), **not** from `elem?.OwnerElement` alone — the latter is null in the empty-name case and would misroute a child position to root scope.
 
 Algorithm in three steps:
 1. `FindNodeAt(line, column)` once, reused everywhere.
 2. If the node is a content / extension node (value, comment, cdata, extension, arg, string-value), classify by its runtime type. Two source-text probes precede the node switch:
    - `=` probe at the attribute level — cursor right after an attribute's `=` with no value yet (`<a b=|`) returns `AttributeValueContext(Value=null)`.
-   - Tag-name probe — walk back over name chars; preceded by `<` ⇒ `TagNameContext`, by `</` ⇒ `EndTagNameContext`. Handles the `<Butt|` / `</Butt|` cases where the cursor sits past every span's exclusive End.
+   - Tag-name probe — walk back over name chars; preceded by `<` ⇒ `TagNameContext` (root) or `ChildTagNameContext` (when a container is found), by `</` ⇒ `EndTagNameContext`. Handles the `<Butt|` / `</Butt|` cases where the cursor sits past every span's exclusive End.
 3. Otherwise switch on the node type (element / attribute / text / etc.). The `XamlExtension` case applies the same `=` probe internally for `{Binding Foo=|}` and decides type-name-vs-interior by checking whether the cursor's offset is inside `[OpenBraceSpan.Start+1, TypeNameSpan.End]`.
 
 Boundary convention — "what's to the LEFT of the cursor":
@@ -143,6 +153,26 @@ Boundary convention — "what's to the LEFT of the cursor":
 - Cursor on whitespace immediately after a name is the *next* context (Interior / Arg slot). The probe walks back over name chars, so this falls out automatically.
 
 For unclosed extensions specifically, `XamlValue.FindNodeAt` descends into the extension even at its exclusive-end column — without that, `"{|"` (cursor right after `{`) would land on the surrounding `XamlValue` instead of the empty-type-name extension.
+
+---
+
+## On-type formatting (auto-edits)
+
+`XamlDocument.EditAt(line, column, char ch) → XamlTypingEdit?` is the formatting sibling of `ContextAt`: given a freshly typed trigger character (already in `Source`, caret right after it) it returns the auto-edit to apply, or `null`. Implemented by `XamlTypingEditor`; driven by the LSP `textDocument/onTypeFormatting` handler (`OnTypeFormattingHandler`, trigger chars `>` and `/`). Proven end-to-end in VS 2026.
+
+**`XamlTypingEdit(TextSpan Replace, string NewText)`** — a neutral, LSP-free edit; the server maps it 1:1 to a `TextEdit` (`Replace → Range`, `NewText`). **No explicit caret field:** VS 2026 derives the caret from the edit *shape* (verified live, see [memory: onTypeFormatting caret](/.claude/memory/project_ontypeformatting_caret.md)):
+- an **empty `Replace` at the caret** leaves the caret to the **left** of `NewText`;
+- a **`Replace` whose range END is the caret** moves the caret to the **end** of `NewText`;
+- a `Replace` entirely to the **right** of the caret leaves the caret put.
+
+The shape *is* the caret instruction, so a `(span, text)` pair suffices — no desired-caret field was needed.
+
+**Behaviours** (`switch (ch)` in `XamlTypingEditor.Edit`):
+- **`>` → insert matching close tag.** `<Button>|` ⇒ `<Button>|</Button>`. Empty `Replace` at the caret, `NewText = "</name>"`. Guarded: the element (from `FindNodeAt`) must be neither self-closing nor already closed; name from `OpenNameSpan`.
+- **`/` → complete self-close.** `<Button/|` ⇒ `<Button/>|`. `Replace` of the just-typed `/`, `NewText = "/>"` (range ends at the caret ⇒ caret after `>`).
+- **`/` → collapse a redundant close tag.** `<Grid|></Grid>` + `/` ⇒ `<Grid/|>` (the `</Grid>` is deleted). Fires only when, right after the existing `>`, the **literal** text `</name>` stands **immediately** there with a **matching name** — `Replace` = its span, `NewText = ""` (deletion is to the right of the caret, so the caret stays). **Deliberately strict** (see [memory: typical over exhaustive](/.claude/memory/feedback_typical_over_exhaustive.md)): no whitespace skipping, no content analysis — adjacency already implies the element is empty. The **name match is mandatory** — a partial child before a parent's close tag (`<StackPanel><Grid/></StackPanel>`) must not eat `</StackPanel>`.
+
+**Why not route through `ContextAt`.** onTypeFormatting fires *after* the character is in the buffer, with the caret right after it. At that caret the element's span is at its exclusive End (EOF cases `<Button>` / `<Button/`), so `FindNodeAt(caret)` returns `null` and `ContextAt` would say `Outside`. The robust primitive is **`FindNodeAt(column - 1)`** — the position of the typed character, which sits inside the element's span and yields it directly. So `EditAt` reuses `FindNodeAt` (parser owns positions) but does **not** go through the `ContextAt` union. Guards lean on this: a `>` / `/` inside an attribute value or text content resolves to a `XamlValue` / `XamlText`, so those positions never reach an edit. Covered by `EditAtTests`.
 
 ---
 
@@ -171,7 +201,7 @@ These wrap raw reflection so no `System.Type` / `PropertyInfo` leaks past the re
 - `XamlCompletionEntry(Label, XamlCompletionKind, Detail?)` + `XamlCompletionKind { Tag, Attribute, EnumValue }` — domain-neutral; `CompletionHandler.MapKind` turns each into a `CompletionItemKind`.
 
 **`Complete` dispatches on `ContextAt`** — the parser owns all position semantics (see "Position classification"); the provider only decides *what to offer*. Implemented arms:
-- **`TagNameContext` / `ElementContentContext` → element tags.** Root vs. child is decided by the **container, not the variant**: a `TagNameContext` with `ContainerElement == null` is the document root → `RootEntries(doc)` (filters `IsRootElement`); a `TagNameContext` *with* a container, or any `ElementContentContext`, completes that container's content → `ContentEntries(doc, XamlElement container)`. Each method receives exactly the data it needs — root needs nothing extra, content gets the container element its analysis will run on. Labels are prefix-qualified via `FullXamlType.QualifiedName`. Enumerate the full candidate set, never point-look-up the in-progress name — the editor filters (see [memory: no partial-name lookup](/.claude/memory/project_completion_no_partial_lookup.md)).
+- **`TagNameContext` → root tags / `ChildTagNameContext` + `ElementContentContext` → child tags.** Root vs. child is decided by the **variant**, not a nullable field (see "Position classification" for the 2×2 and why the old single-variant-with-nullable-container shape was split): `TagNameContext` → `RootEntries(doc)` (filters `IsRootElement`); `ChildTagNameContext` or `ElementContentContext` → `ContentEntries(doc, ...)` for the container's content. Labels are prefix-qualified via `FullXamlType.QualifiedName`. Enumerate the full candidate set, never point-look-up the in-progress name — the editor filters (see [memory: no partial-name lookup](/.claude/memory/project_completion_no_partial_lookup.md)).
 
 All other arms (`TagInteriorContext`, `AttributeNameContext`, `AttributeValueContext`, the four `Extension*`, and the no-op `Outside`/`Text`/`Comment`/`CData`/`EndTagName`) return empty for now. The scaffold convention: each arm hands its method the concentrated data it processes (element / attribute / extension), not the bare base context.
 
@@ -187,9 +217,9 @@ The path of the vxaml file is needed exactly once — on `didOpen`/`didChange`, 
 
 ### What still needs to be built
 
-`Complete` is now on `ContextAt`; the tag arms (`TagNameContext` / `ElementContentContext`) are implemented. Remaining:
+`Complete` is now on `ContextAt`; the tag arms (`TagNameContext` → root, `ChildTagNameContext` / `ElementContentContext` → child) are implemented. Remaining:
 
-- **Content-model filtering for child tags.** `ContentEntries` already receives the container element but uses a **placeholder filter** (drop markup extensions, offer the rest). Real filtering — by the container type's content model, or a coarser role like a future `IsUIElement` — is **deliberately deferred**; the decision between "all reachable", "by role", and "true content model" has not been taken (see [memory: defer dead-code polish](/.claude/memory/feedback_defer_dead_code.md) spirit — don't deepen until the call is made).
+- **Content-model filtering for child tags.** `ContentEntries` does not yet read the container element — it uses a **placeholder filter** (drop markup extensions and root elements, offer the rest). Real filtering — by the container type's content model, or a coarser role like a future `IsUIElement` — is **deliberately deferred**; the decision between "all reachable", "by role", and "true content model" has not been taken (see [memory: defer dead-code polish](/.claude/memory/feedback_defer_dead_code.md) spirit — don't deepen until the call is made).
 - **Remaining `Complete` arms** — `TagInteriorContext` / `AttributeNameContext` (settable properties of the element), `AttributeValueContext` (enum/bool), the four `Extension*`. Each follows the same scaffold: receive its concentrated context data, enumerate, never point-look-up the partial name.
 - **Markup-extension completion** — open design questions: type universe for extension names (all vs. `IsMarkupExtension`, the optional `Extension` suffix, `x:`-namespace forms).
 - **Value completion beyond enums** — bool (`True`/`False`) and known type-converter values; only enums are wired in `XamlProperty`.
@@ -209,7 +239,7 @@ The path of the vxaml file is needed exactly once — on `didOpen`/`didChange`, 
 
 | `XamlPositionContext` variant | Kind |
 |---|---|
-| `TagNameContext` (`<Button>`) | `Class` |
+| `TagNameContext` / `ChildTagNameContext` (`<Button>`) | `Class` |
 | `AttributeNameContext` | `Property` |
 | `AttributeValueContext` | `Value` / `EnumMember` |
 | `TagInteriorContext` (attr-name slot) | `Property` |

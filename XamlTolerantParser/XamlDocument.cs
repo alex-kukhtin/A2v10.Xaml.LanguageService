@@ -58,6 +58,13 @@ public sealed class XamlDocument
     public XamlPositionContext ContextAt(Int32 line, Int32 column) =>
         XamlPositionClassifier.Classify(this, line, column);
 
+    // The on-type auto-edit for a freshly typed trigger character `ch` with the
+    // caret at (line, column) — i.e. the character is already in Source, the
+    // caret sits right after it. Returns null when the keystroke triggers no
+    // edit. Drives LSP onTypeFormatting. See XamlTypingEditor for the rules.
+    public XamlTypingEdit? EditAt(Int32 line, Int32 column, Char ch) =>
+        XamlTypingEditor.Edit(this, line, column, ch);
+
     // Converts an LSP (line, column) pair to a source offset. Clamped to document
     // bounds. The line lookup is O(1) via the precomputed line-start table; the
     // remaining work is a bounded scan of that single line to honour the lexer's

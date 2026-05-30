@@ -34,8 +34,6 @@ public class ContextAtTests
         var doc = Parse(src);
         var ctx = Assert.IsType<TagNameContext>(At(doc, 3)); // inside "Button"
         Assert.Same(doc.Roots[0], ctx.Element);
-        // ContainerElement is parent — root has no parent.
-        Assert.Null(ctx.ContainerElement);
     }
 
     [Fact]
@@ -64,11 +62,11 @@ public class ContextAtTests
         //                  0123456789012
         const string src = "<a><Butt";
         var doc = Parse(src);
-        var ctx = Assert.IsType<TagNameContext>(At(doc, 8)); // right after 'Butt'
+        var ctx = Assert.IsType<ChildTagNameContext>(At(doc, 8)); // right after 'Butt'
         Assert.NotNull(ctx.Element);
         Assert.Equal("Butt", doc.TextOf(ctx.Element!.OpenNameSpan));
-        // ContainerElement is the parent <a>.
-        Assert.Same(doc.Roots[0], ctx.ContainerElement);
+        // Container is the parent <a>.
+        Assert.Same(doc.Roots[0], ctx.Container);
     }
 
     [Fact]
@@ -203,10 +201,35 @@ public class ContextAtTests
     {
         const string src = "<root><Butt";
         var doc = Parse(src);
-        var ctx = Assert.IsType<TagNameContext>(At(doc, 11)); // inside the partial 'Butt'
-        // Element is the partial <Butt>; ContainerElement is its parent <root>.
-        Assert.NotSame(ctx.Element, ctx.ContainerElement);
-        Assert.Same(doc.Roots[0], ctx.ContainerElement);
+        var ctx = Assert.IsType<ChildTagNameContext>(At(doc, 11)); // inside the partial 'Butt'
+        // Element is the partial <Butt>; Container is its parent <root>.
+        Assert.NotSame(ctx.Element, ctx.Container);
+        Assert.Same(doc.Roots[0], ctx.Container);
+    }
+
+    [Fact]
+    public void Partial_child_before_close_tag_is_ChildTagName_with_container()
+    {
+        // The reported case: a partial child tag sitting before the parent's
+        // close tag must carry the parent as its container, not fall back to
+        // root scope.
+        const string src = "<Page>\n   <But\n</Page>";
+        var doc = Parse(src);
+        var ctx = Assert.IsType<ChildTagNameContext>(doc.ContextAt(1, 7)); // after "But"
+        Assert.Equal("But", doc.TextOf(ctx.Element!.OpenNameSpan));
+        Assert.Same(doc.Roots[0], ctx.Container); // <Page>
+    }
+
+    [Fact]
+    public void Just_after_less_than_inside_element_is_ChildTagName_with_null_element()
+    {
+        // '<' typed inside a parent, no name yet — no partial node exists, but
+        // the container is still the enclosing element.
+        const string src = "<a><";
+        var doc = Parse(src);
+        var ctx = Assert.IsType<ChildTagNameContext>(At(doc, 4));
+        Assert.Null(ctx.Element);
+        Assert.Same(doc.Roots[0], ctx.Container); // <a>
     }
 
     [Fact]
@@ -237,8 +260,9 @@ public class ContextAtTests
         const string src = "<a>\n  <Butt";
         var doc = Parse(src);
         // (1, 10) is right after the last 't' of "Butt".
-        var ctx = Assert.IsType<TagNameContext>(doc.ContextAt(1, 10));
+        var ctx = Assert.IsType<ChildTagNameContext>(doc.ContextAt(1, 10));
         Assert.NotNull(ctx.Element);
         Assert.Equal("Butt", doc.TextOf(ctx.Element!.OpenNameSpan));
+        Assert.Same(doc.Roots[0], ctx.Container);
     }
 }

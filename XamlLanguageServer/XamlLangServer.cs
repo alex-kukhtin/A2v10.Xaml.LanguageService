@@ -15,6 +15,53 @@ namespace XamlLanguageServer;
 // XamlContextProvider) go with it. No Dispose: LanguageServerProvider exposes no
 // restart hook, so this object is created once per process and torn down only by
 // process exit.
+//
+// ── VS 2026 client capabilities (probed 2026-05-30 by dumping ClientCapabilities
+//    at `initialize`) ─────────────────────────────────────────────────────────
+// Recorded so feature work targets the real client surface. Re-probe if VS changes.
+//
+// Completion (textDocument/completion) — most rich features are OFF:
+//   SnippetSupport          = false → no standard `$1`/`$0` tab stops in insert text.
+//   CommitCharactersSupport = false → no per-item commit characters. A shared set is
+//                                     still possible via registration AllCommitCharacters
+//                                     or CompletionList.ItemDefaults.commitCharacters.
+//   ContextSupport          = false → the request carries NO CompletionContext, so the
+//                                     trigger character is NOT available; dispatch purely
+//                                     off XamlDocument.ContextAt position classification.
+//   InsertReplaceSupport    = false → no InsertReplaceEdit; use a plain single-range
+//                                     TextEdit for prefixed names (x:Name, my:Button).
+//   PreselectSupport        = false → cannot preselect an item.
+//   ResolveSupport / ResolveAdditionalTextEditsSupport = false → no lazy resolve;
+//                                     any AdditionalTextEdits must be sent upfront.
+//   CompletionList.ItemDefaults honors: commitCharacters, editRange, insertTextFormat.
+//   CompletionItemKind.ValueSet = full 1..25 (+ VS-proprietary 118115.. icon kinds).
+//
+// OnTypeFormatting: supported — already proven working (caret follows TextEdit shape;
+//   see project memory project_ontypeformatting_caret).
+//
+// Hover: ContentFormat = ["plaintext"] ONLY → no Markdown; hover content must be plain
+//   text (matters for the future HoverService).
+//
+// PublishDiagnostics: supported, but RelatedInformation / VersionSupport /
+//   CodeDescriptionSupport / DataSupport all false → markers are span+message only.
+//   Pull diagnostics also available (textDocument/diagnostic; _vs_supportsDiagnosticRequests).
+//
+// Supported, for later phases: SignatureHelp (ContextSupport=true), Definition /
+//   TypeDefinition / Implementation (LinkSupport=false → return Location, not
+//   LocationLink), References, DocumentHighlight, DocumentSymbol (flat only —
+//   Hierarchical=false), Rename (PrepareSupport=true), FoldingRange,
+//   LinkedEditingRange (← live open/close tag-pair editing), CodeAction (Data+Resolve),
+//   SemanticTokens (full+range+delta), InlayHint, DocumentLink.
+//
+// VS-proprietary extensions (_vs_supportsVisualStudioExtensions = true):
+//   _vs_onAutoInsert (dynamicRegistration=true) → VS's purpose-built on-type auto-insert
+//     (closing tags, `=""`, snippet-on-type). Accepts VS snippet replies (with `$0`)
+//     even though standard SnippetSupport=false. Candidate alternative to onTypeFormatting
+//     for `/` `>` `=` if we ever need caret control beyond the (span,newText) shape —
+//     needs the _vs_ protocol, NOT wired in OmniSharp out of the box.
+//   _vs_supportedSnippetVersion = 1; _vs_supportsIconExtensions = true;
+//   _vs_supportsDiagnosticRequests = true.
+// ──────────────────────────────────────────────────────────────────────────────
 public sealed class XamlLangServer
 {
     private readonly AssemblyResolver _assemblyResolver = new();
@@ -43,7 +90,8 @@ public sealed class XamlLangServer
                  .AddSingleton<XamlContextProvider>();
             })
             .WithHandler<TextDocumentSyncHandler>()
-            .WithHandler<CompletionHandler>());
+            .WithHandler<CompletionHandler>()
+            .WithHandler<OnTypeFormattingHandler>());
 
         await server.WaitForExit;
         _assemblyResolver.Dispose();

@@ -73,6 +73,10 @@ internal class CompletionHandler(
         _ => CompletionItemKind.Text,
     };
 
+    // VS 2026 advertises SnippetSupport / CommitCharactersSupport / ContextSupport /
+    // InsertReplaceSupport / PreselectSupport all = false (full capability snapshot in
+    // XamlLangServer). Consequences here: no trigger char in the request (dispatch off
+    // ContextAt only), no per-item commit chars, plain single-range TextEdits only.
     public CompletionRegistrationOptions GetRegistrationOptions(
         CompletionCapability capability,
         ClientCapabilities clientCapabilities) => new()

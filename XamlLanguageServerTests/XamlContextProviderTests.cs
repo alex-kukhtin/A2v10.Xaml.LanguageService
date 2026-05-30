@@ -42,23 +42,24 @@ public class XamlContextProviderTests
     }
 
     [Fact]
-    public void Complete_in_tag_name_slot_offers_element_tags()
+    public void Complete_in_child_tag_name_slot_offers_content_not_root()
     {
         using var resolver = new AssemblyResolver();
         resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
         var ctx = new XamlContextProvider(resolver);
 
-        // Line 1 is a child tag being typed inside the (open) Page element.
-        // Cursor at column 2 — right after `<B`, a TagNameContext.
+        // Line 1 is a child tag being typed inside the (open) Page element —
+        // a ChildTagNameContext. The container's content is offered; the root
+        // element Page must NOT appear (it is root-only).
         const string src =
             "<Page xmlns=\"clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml\">\n<B";
         var doc = XamlParser.Parse(src);
 
         var entries = ctx.Complete(doc, 1, 2);
 
-        var page = entries.FirstOrDefault(e => e.Label == "Page");
-        Assert.NotNull(page);
-        Assert.Equal(XamlCompletionKind.Tag, page!.Kind);
+        Assert.NotEmpty(entries);
+        Assert.All(entries, e => Assert.Equal(XamlCompletionKind.Tag, e.Kind));
+        Assert.DoesNotContain(entries, e => e.Label == "Page");
     }
 
     private static string FixtureProjectDir([CallerFilePath] string? thisFile = null) =>

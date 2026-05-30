@@ -62,7 +62,21 @@ internal static class XamlPositionClassifier
             var nameStartOffset = offset - probe.NameLength;
             var elem = ResolveTagElement(doc, node, line, column, probe.NameLength,
                 e => e.OpenNameSpan.Start == nameStartOffset);
-            return new TagNameContext(elem, elem?.OwnerElement, diagnostics);
+            // Container is the element the '<' sits inside — the partial tag's
+            // owner, or (when no partial node exists yet, e.g. `<a><|`) the
+            // element the cursor is structurally in. Never `elem?.OwnerElement`
+            // alone: that is null in the empty-name case and would misroute a
+            // child position to the root. The column-1 retry covers the cursor
+            // sitting at the enclosing element's exclusive End (`<a><|`), where
+            // FindNodeAt at the cursor returns null but the '<' one column back
+            // is inside the container.
+            var container = elem != null
+                ? elem.OwnerElement
+                : EnclosingElement(node)
+                  ?? (column > 0 ? EnclosingElement(doc.FindNodeAt(line, column - 1)) : null);
+            return container == null
+                ? new TagNameContext(elem, diagnostics)
+                : new ChildTagNameContext(elem, container, diagnostics);
         }
         if (probe.Kind == ProbeKind.Close)
         {
@@ -148,6 +162,12 @@ internal static class XamlPositionClassifier
         var elem = doc.FindNodeAt(line, nameStartCol) as XamlElement;
         return elem != null && match(elem) ? elem : null;
     }
+
+    // The element a cursor node sits inside: the node itself when it is an
+    // element, otherwise the nearest enclosing one. Used to find a child tag's
+    // container when no partial element node exists yet (`<a><|`).
+    private static XamlElement? EnclosingElement(XamlNode? node)
+        => node as XamlElement ?? node?.OwnerElement;
 
     private enum ProbeKind { None, Open, Close }
     private readonly record struct ProbeResult(ProbeKind Kind, Int32 NameLength);

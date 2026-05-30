@@ -39,7 +39,8 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
     //
     // Skeleton step: every arm returns nothing for now. Each will be filled
     // in turn:
-    //   TagName / ElementContent      → root / child element tags
+    //   TagName                       → root element tags
+    //   ChildTagName / ElementContent → child element tags of the container
     //   TagInterior / AttributeName   → settable properties of the element
     //   AttributeValue                → enum / bool values
     //   ExtensionTypeName             → markup-extension types
@@ -52,6 +53,7 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
         return ctx switch
         {
             TagNameContext             => RootEntries(doc, ctx),
+            ChildTagNameContext        => ContentEntries(doc, ctx),
             ElementContentContext      => ContentEntries(doc, ctx),
             TagInteriorContext         => [],
             AttributeNameContext       => [],

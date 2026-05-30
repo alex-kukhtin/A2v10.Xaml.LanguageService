@@ -21,14 +21,27 @@ public sealed record OutsideContext(
     IReadOnlyList<XamlDiagnostic> Diagnostics)
     : XamlPositionContext(Diagnostics);
 
-// Typing an element name in an open tag: `<Butt|`, `<|`.
-//   Element          — the partial tag being typed; null when no node yet
-//                      exists (the `<|` trigger-character moment, or when
-//                      the cursor sits in a parent like `<a><|`).
-//   ContainerElement — the element this tag lives inside; null for root.
+// Typing an element name at the document root: `<Pag|`, `<|` (empty doc).
+// Root scope — the completion universe is the root-element types. The child
+// counterpart is ChildTagNameContext.
+//   Element — the partial tag being typed; null when no node yet exists
+//             (the `<|` trigger-character moment on an empty document).
 public sealed record TagNameContext(
     XamlElement? Element,
-    XamlElement? ContainerElement,
+    IReadOnlyList<XamlDiagnostic> Diagnostics)
+    : XamlPositionContext(Diagnostics);
+
+// Typing an element name inside another element: `<a><Butt|`, `<a><|`.
+// Child scope — the completion universe is the container's content model.
+// The `<`-not-yet-typed counterpart is ElementContentContext; the root
+// counterpart is TagNameContext.
+//   Element   — the partial tag being typed; null at the `<a><|` moment
+//               where the '<' has no name node yet.
+//   Container — the element this tag lives inside; always present (a child
+//               by definition has a container).
+public sealed record ChildTagNameContext(
+    XamlElement? Element,
+    XamlElement Container,
     IReadOnlyList<XamlDiagnostic> Diagnostics)
     : XamlPositionContext(Diagnostics);
 
