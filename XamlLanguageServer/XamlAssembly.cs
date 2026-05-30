@@ -15,32 +15,34 @@ namespace XamlLanguageServer;
 internal sealed class XamlAssembly
 {
     private readonly Assembly _assembly;
-    private readonly Dictionary<String, Dictionary<String, Type>> _byNamespace =
+    private readonly Dictionary<String, Dictionary<String, XamlType>> _byNamespace =
         new(StringComparer.Ordinal);
 
     public XamlAssembly(Assembly assembly)
     {
         _assembly = assembly;
+
         foreach (var t in _assembly.GetTypes())
         {
-            if (!t.IsPublic || t.Namespace == null)
+            if (!t.IsPublic || t.Namespace == null || t.IsInterface || t.IsEnum)
                 continue;
+
             if (!_byNamespace.TryGetValue(t.Namespace, out var dict))
             {
-                dict = new Dictionary<String, Type>(StringComparer.Ordinal);
+                dict = new Dictionary<String, XamlType>(StringComparer.Ordinal);
                 _byNamespace[t.Namespace] = dict;
             }
-            dict[t.Name] = t;
+            dict[t.Name] = new XamlType(t);
         }
     }
 
-    public Type? GetType(String clrNamespace, String typeName) =>
+    public XamlType? GetType(String clrNamespace, String typeName) =>
         _byNamespace.TryGetValue(clrNamespace, out var byName) &&
         byName.TryGetValue(typeName, out var t)
             ? t : null;
 
-    public IEnumerable<Type> GetTypes(String clrNamespace) =>
+    public IEnumerable<XamlType> GetTypes(String clrNamespace) =>
         _byNamespace.TryGetValue(clrNamespace, out var byName)
             ? byName.Values
-            : Enumerable.Empty<Type>();
+            : Enumerable.Empty<XamlType>();
 }

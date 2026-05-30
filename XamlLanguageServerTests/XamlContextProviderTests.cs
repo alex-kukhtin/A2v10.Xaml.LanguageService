@@ -31,14 +31,34 @@ public class XamlContextProviderTests
         var doc = XamlParser.Parse(PageXaml);
         var ctx = new XamlContextProvider(resolver);
 
-        var page = ctx.RootTypes(doc).FirstOrDefault(t => t.Name == "Page");
+        var page = ctx.ReachableTypes(doc).FirstOrDefault(t => t.Type.Name == "Page");
         Assert.NotNull(page);
         Assert.Equal(string.Empty, page!.Prefix);
 
-        var title = page.Properties.FirstOrDefault(p => p.Name == "Title");
+        var title = page.Type.Properties.FirstOrDefault(p => p.Name == "Title");
         Assert.NotNull(title);
         Assert.Equal("String", title!.Type);
         Assert.Null(title.EnumValues);
+    }
+
+    [Fact]
+    public void Complete_in_tag_name_slot_offers_element_tags()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        // Line 1 is a child tag being typed inside the (open) Page element.
+        // Cursor at column 2 — right after `<B`, a TagNameContext.
+        const string src =
+            "<Page xmlns=\"clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml\">\n<B";
+        var doc = XamlParser.Parse(src);
+
+        var entries = ctx.Complete(doc, 1, 2);
+
+        var page = entries.FirstOrDefault(e => e.Label == "Page");
+        Assert.NotNull(page);
+        Assert.Equal(XamlCompletionKind.Tag, page!.Kind);
     }
 
     private static string FixtureProjectDir([CallerFilePath] string? thisFile = null) =>

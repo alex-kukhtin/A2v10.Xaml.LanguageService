@@ -29,6 +29,10 @@ internal static class XamlPositionClassifier
             case XamlValue v: return MakeValueContext(v, diagnostics);
             case XamlComment c: return new CommentContext(c.OwnerElement, c, diagnostics);
             case XamlCData cd: return new CDataContext(cd.OwnerElement, cd, diagnostics);
+            case XamlExtension ext: return ClassifyInExtension(doc, ext, offset, diagnostics);
+            case XamlNamedArgument na: return ClassifyOnNamedArgument(na, offset, diagnostics);
+            case XamlExtensionStringValue sv: return ClassifyOnStringValue(sv, diagnostics);
+            case XamlPositionalArgument pa: return ClassifyOnPositionalArgument(pa, diagnostics);
         }
 
         // (2a) Cursor right after `=` of an attribute — value slot. Runs before
@@ -208,4 +212,88 @@ internal static class XamlPositionClassifier
 
     private static Boolean IsNameChar(Char c) =>
         Char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.' || c == ':';
+
+    // -------- markup extension classification --------
+
+    // Cursor landed on a XamlExtension node — either the immediately-enclosing
+    // markup extension or inside its TypeName / interior whitespace. Also
+    // probes for `{...Name=|` (cursor right after a named arg's '=' with no
+    // value yet), where the named-arg's span ends at '=' and FindNodeAt would
+    // otherwise treat the cursor as plain extension interior.
+    private static XamlPositionContext ClassifyInExtension(
+        XamlDocument doc, XamlExtension ext, Int32 offset, IReadOnlyList<XamlDiagnostic> diags)
+    {
+        var attr = FindOwningAttribute(ext);
+        // Extension always lives under a XamlAttribute by construction.
+        var element = attr.Owner!;
+
+        // (i) `Name=|` probe — value slot of a named arg whose value is null.
+        if (offset > 0 && doc.Source[offset - 1] == '=')
+        {
+            foreach (var a in ext.Arguments)
+            {
+                if (a is XamlNamedArgument na && na.EqualsSpan is { } eq && eq.End == offset)
+                    return new ExtensionArgValueContext(element, attr, ext, na, null, diags);
+            }
+        }
+
+        // (ii) Inside or immediately after the type name. For an empty type
+        //      name (`{|`) the only valid offset is right after '{'.
+        var typeEnd = ext.TypeNameSpan.Length > 0
+            ? ext.TypeNameSpan.End
+            : ext.OpenBraceSpan.End;
+        if (offset > ext.OpenBraceSpan.Start && offset <= typeEnd)
+            return new ExtensionTypeNameContext(element, attr, ext, diags);
+
+        // (iii) Anything else inside the extension — whitespace between args,
+        //       before '}', etc.
+        return new ExtensionInteriorContext(element, attr, ext, diags);
+    }
+
+    private static XamlPositionContext ClassifyOnNamedArgument(
+        XamlNamedArgument na, Int32 offset, IReadOnlyList<XamlDiagnostic> diags)
+    {
+        var ext = (XamlExtension)na.Parent!;
+        var attr = FindOwningAttribute(ext);
+        var element = attr.Owner!;
+
+        // Past the '=' but before the (possibly null) value's span — value slot.
+        if (na.EqualsSpan is { } eq && offset >= eq.End)
+            return new ExtensionArgValueContext(element, attr, ext, na, na.Value, diags);
+
+        return new ExtensionArgNameContext(element, attr, ext, na, diags);
+    }
+
+    private static XamlPositionContext ClassifyOnPositionalArgument(
+        XamlPositionalArgument pa, IReadOnlyList<XamlDiagnostic> diags)
+    {
+        var ext = (XamlExtension)pa.Parent!;
+        var attr = FindOwningAttribute(ext);
+        var element = attr.Owner!;
+        return new ExtensionArgValueContext(element, attr, ext, pa, pa.Value, diags);
+    }
+
+    private static XamlPositionContext ClassifyOnStringValue(
+        XamlExtensionStringValue sv, IReadOnlyList<XamlDiagnostic> diags)
+    {
+        var arg = (XamlExtensionArgument)sv.Parent!;
+        var ext = (XamlExtension)arg.Parent!;
+        var attr = FindOwningAttribute(ext);
+        var element = attr.Owner!;
+        return new ExtensionArgValueContext(element, attr, ext, arg, sv, diags);
+    }
+
+    // Walks the Parent chain past any number of nested-extension layers
+    // until the owning XamlAttribute is reached. Parser invariant guarantees
+    // every extension descendant has one.
+    private static XamlAttribute FindOwningAttribute(XamlNode node)
+    {
+        var p = node.Parent;
+        while (p != null)
+        {
+            if (p is XamlAttribute a) return a;
+            p = p.Parent;
+        }
+        throw new InvalidOperationException("Extension node has no XamlAttribute ancestor.");
+    }
 }

@@ -216,7 +216,18 @@ public sealed class XamlParser
             contentStartOffset, contentEndOffset - contentStartOffset,
             contentStartLine, contentStartCol,
             contentEndLine, contentEndCol);
-        return new XamlValue(s, contentSpan, quote, valTok.IsUnterminated);
+        var value = new XamlValue(s, contentSpan, quote, valTok.IsUnterminated);
+
+        // Promote `{ ... }` content to a structured XamlExtension. The
+        // mini-parser is self-contained: it reads only inside ContentSpan
+        // and appends diagnostics to the same list.
+        var ext = new MarkupExtensionParser(_source, _diagnostics).TryParse(contentSpan);
+        if (ext != null)
+        {
+            ext.Parent = value;
+            value.Extension = ext;
+        }
+        return value;
     }
 
     void ParseEndTag(Token endTok)

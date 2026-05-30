@@ -81,12 +81,10 @@ internal sealed class MarkupExtensionParser
         else
         {
             _diags.Add(new XamlDiagnostic(openSpan, "Unterminated markup extension."));
+            // _pos (and thus `current`) is always at or past the end of the
+            // last argument, so this covers the whole parsed region.
             var current = SpanAt(Snapshot());
-            ext.Span = ext.Arguments.Count > 0
-                ? TextSpan.FromTo(openSpan, ext.Arguments[ext.Arguments.Count - 1].Span)
-                : TextSpan.FromTo(openSpan, current);
-            // Extend to cover the current position regardless of args
-            ext.Span = TextSpan.FromTo(ext.Span, current);
+            ext.Span = TextSpan.FromTo(openSpan, current);
         }
 
         return ext;
@@ -97,7 +95,7 @@ internal sealed class MarkupExtensionParser
         while (_pos < _end)
         {
             SkipWs();
-            if (_pos >= _end || _src[_pos] == '}') return;
+            if (_pos >= _end || IsExtensionBarrier(_src[_pos])) return;
 
             var beforeArgPos = _pos;
             var arg = ParseArgument(ext);
@@ -111,7 +109,7 @@ internal sealed class MarkupExtensionParser
                 Consume();
                 continue;
             }
-            if (_pos < _end && _src[_pos] == '}')
+            if (_pos < _end && IsExtensionBarrier(_src[_pos]))
                 return;
 
             // Stuck: neither separator nor close. If we haven't advanced, eat
@@ -167,7 +165,6 @@ internal sealed class MarkupExtensionParser
 
     XamlPositionalArgument? ParsePositionalArgument(XamlExtension ext)
     {
-        var startSnap = Snapshot();
         XamlExtensionValue? val = ParseValue(null);
         if (val == null)
         {
@@ -179,7 +176,6 @@ internal sealed class MarkupExtensionParser
         arg.Value = val;
         val.Parent = arg;
         // val.Span already accurate; arg span == val span for positional.
-        _ = startSnap; // (kept for future use; positional has no leading name)
         return arg;
     }
 
@@ -190,7 +186,7 @@ internal sealed class MarkupExtensionParser
     {
         if (_pos >= _end) return null;
         var c = _src[_pos];
-        if (c == ',' || c == '}') return null;
+        if (c == ',' || IsExtensionBarrier(c)) return null;
 
         if (c == '{')
         {
@@ -208,7 +204,7 @@ internal sealed class MarkupExtensionParser
         while (_pos < _end)
         {
             var ch = _src[_pos];
-            if (ch == ',' || ch == '}' || ch == '{') break;
+            if (ch == ',' || ch == '{' || IsExtensionBarrier(ch)) break;
             Consume();
             if (!IsWs(ch))
                 lastNonWs = Snapshot();
@@ -253,4 +249,19 @@ internal sealed class MarkupExtensionParser
 
     static bool IsNameChar(char c) =>
         char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.' || c == ':';
+
+    // Hard stop characters that can never appear in a well-formed markup
+    // extension. When the attribute value itself is unterminated the lexer
+    // hands us a ContentSpan that may run past `>` and on to EOF; without
+    // this guard the mini-parser would swallow the rest of the tag (and
+    // potentially the rest of the document) into a giant string value.
+    // Treating '<' and '>' as barriers makes the unterminated-extension span
+    // stop at the surrounding tag's boundary, which is what diagnostics and
+    // FindNodeAt expect.
+    //
+    // The matching attribute quote (' / ") is intentionally NOT a barrier:
+    // when ContentSpan is well-formed it can't contain the outer quote, and
+    // when it isn't, the inner quote could legitimately be a string-format
+    // delimiter inside an argument value.
+    static bool IsExtensionBarrier(char c) => c == '}' || c == '<' || c == '>';
 }

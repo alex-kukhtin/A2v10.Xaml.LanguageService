@@ -18,7 +18,7 @@ public sealed class XamlAttribute : XamlNode
     public override XamlNode FindNodeAt(int line, int column)
     {
         if (Value is { } v && v.Span.Contains(line, column))
-            return v;
+            return v.FindNodeAt(line, column);
         return this;
     }
 }

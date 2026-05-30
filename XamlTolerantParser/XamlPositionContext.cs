@@ -92,3 +92,54 @@ public sealed record CDataContext(
     XamlCData Node,
     IReadOnlyList<XamlDiagnostic> Diagnostics)
     : XamlPositionContext(Diagnostics);
+
+// --- Markup extension contexts ----------------------------------------
+//
+// All four carry the owning XamlAttribute / XamlElement so handlers don't
+// have to walk Parent. Extension is the *immediately enclosing* one — for
+// nested cases (`{Binding Source={StaticResource F|oo}}`) Extension is the
+// inner extension, and the outer is reachable via Extension.Parent walk.
+
+// Typing the markup extension type name: `{Bind|`, `{|`, `{x:Stat|ic`.
+//   TypeNameSpan may have Length == 0 (the `{|` moment) — that is the
+//   reason we route here even when the cursor sits in empty span.
+public sealed record ExtensionTypeNameContext(
+    XamlElement Element,
+    XamlAttribute Attribute,
+    XamlExtension Extension,
+    IReadOnlyList<XamlDiagnostic> Diagnostics)
+    : XamlPositionContext(Diagnostics);
+
+// Cursor inside an extension but not on any specific node — whitespace
+// after the type name, between arguments, before `}`. Completion here
+// typically offers argument names of the extension type.
+public sealed record ExtensionInteriorContext(
+    XamlElement Element,
+    XamlAttribute Attribute,
+    XamlExtension Extension,
+    IReadOnlyList<XamlDiagnostic> Diagnostics)
+    : XamlPositionContext(Diagnostics);
+
+// Typing the *name* of a named argument: `{Binding Pa|th=Foo}`. Completion
+// offers property names of the extension type.
+public sealed record ExtensionArgNameContext(
+    XamlElement Element,
+    XamlAttribute Attribute,
+    XamlExtension Extension,
+    XamlNamedArgument Argument,
+    IReadOnlyList<XamlDiagnostic> Diagnostics)
+    : XamlPositionContext(Diagnostics);
+
+// Typing an argument value. Covers both named (`{Binding Path=Na|me}`,
+// `{Binding Path=|}`) and positional (`{Binding Na|me}`).
+//   Value is null when the user just typed `=` and nothing follows.
+//   Argument is XamlNamedArgument or XamlPositionalArgument — consumers
+//   pattern-match on it when they need to distinguish.
+public sealed record ExtensionArgValueContext(
+    XamlElement Element,
+    XamlAttribute Attribute,
+    XamlExtension Extension,
+    XamlExtensionArgument Argument,
+    XamlExtensionValue? Value,
+    IReadOnlyList<XamlDiagnostic> Diagnostics)
+    : XamlPositionContext(Diagnostics);
