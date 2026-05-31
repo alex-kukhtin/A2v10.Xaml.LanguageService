@@ -1,0 +1,8 @@
+﻿<Page>
+	<Toolbar Visible="True">
+		<Button Icon="Reload" Command="{BindCmd Argument=0, Value={Bind Path=Name}"/>
+	</Toolbar>
+	<Paragraph 
+		Name="Name" 
+		Value="Value"/>
+</Page>

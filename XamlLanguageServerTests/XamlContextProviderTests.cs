@@ -363,6 +363,47 @@ public class XamlContextProviderTests
         Assert.Equal(2, result.EditSpan.Length); // "Ta"
     }
 
+    [Fact]
+    public void Extension_arg_completion_edit_span_covers_the_token_not_the_caret()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        //                  0         1         2
+        //                  0123456789012345678901234
+        const string src = "<Button Show=\"{Bind Dat}\"></Button>";
+        var doc = XamlParser.Parse(src);
+
+        // Caret at col 23 — right after "Dat", at the auto-inserted '}'. The edit
+        // range must cover "Dat" (cols 20..23) so accepting "DataType" REPLACES it,
+        // rather than inserting at the caret and producing "DatDataType".
+        var result = ctx.Complete(doc, 0, 23);
+
+        Assert.Equal(20, result.EditSpan.StartColumn);
+        Assert.Equal(3, result.EditSpan.Length);
+    }
+
+    [Fact]
+    public void Attribute_name_completion_edit_span_covers_the_partial_name()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        //                  0         1
+        //                  01234567890
+        const string src = "<Button Dis";
+        var doc = XamlParser.Parse(src);
+
+        // Caret at col 11 — right after the partial attribute name "Dis" (cols
+        // 8..11). The edit range must cover "Dis", not be empty at the caret.
+        var result = ctx.Complete(doc, 0, 11);
+
+        Assert.Equal(8, result.EditSpan.StartColumn);
+        Assert.Equal(3, result.EditSpan.Length);
+    }
+
     private static string FixtureProjectDir([CallerFilePath] string? thisFile = null) =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile!)!, "..", "XamlTolerantParserTests"));
 }

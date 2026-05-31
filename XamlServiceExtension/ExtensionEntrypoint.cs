@@ -15,7 +15,7 @@ internal class ExtensionEntrypoint : Extension
     public override ExtensionConfiguration ExtensionConfiguration => new()
     {
         Metadata = new(
-            id: "XamlLSP.49ea32ef-9f27-4462-980e-3b9609770226",
+            id: "XamlLSP.C0A64D94-06E3-4485-A09C-46734812477F",
             version: ExtensionAssemblyVersion,
             publisherName: "Oleksandr Kukhtin",
             displayName: "A2v10 Xaml Language Service",

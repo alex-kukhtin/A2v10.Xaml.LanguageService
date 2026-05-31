@@ -69,32 +69,12 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
                 ResolveType(doc, doc.TextOf(eav.Extension.TypeNameSpan)), doc.TextOf(eav.Argument.NameSpan)),
             _ => [],
         };
-        return new XamlCompletionResult(entries, EditSpanOf(doc, ctx, line, column));
-    }
-
-    // The source range a completion at this position replaces — the token under
-    // the caret, selected from the spans the classifier already parsed onto the
-    // context. A property of the position, shared by every entry. Zero-length at
-    // the caret for a pure insertion (content slot, extension interior, or a value
-    // slot with no value node yet). The value slots return the CONTENT span, not
-    // the whole quoted region, so accepting an entry leaves the quotes intact.
-    private static TextSpan EditSpanOf(XamlDocument doc, XamlPositionContext ctx, Int32 line, Int32 column) => ctx switch
-    {
-        TagNameContext t => t.Element?.OpenNameSpan ?? Caret(doc, line, column),
-        ChildTagNameContext c => c.Element?.OpenNameSpan ?? Caret(doc, line, column),
-        AttributeNameContext a => a.Attribute.NameSpan,
-        AttributeValueContext v => v.Value?.ContentSpan ?? Caret(doc, line, column),
-        ExtensionTypeNameContext e => e.Extension.TypeNameSpan,
-        ExtensionArgNameContext n => n.Argument.NameSpan,
-        ExtensionPositionalArgContext p => p.Argument.Span,
-        ExtensionArgValueContext av => av.Value?.Span ?? Caret(doc, line, column),
-        _ => Caret(doc, line, column),
-    };
-
-    private static TextSpan Caret(XamlDocument doc, Int32 line, Int32 column)
-    {
-        var offset = doc.OffsetAt(line, column);
-        return new TextSpan(offset, 0, line, column, line, column);
+        // The replaced range is the identifier run around the caret — one text
+        // fact, the same in every context (see XamlDocument.IdentifierSpanAt).
+        // The handler stamps it onto each item's TextEdit so the editor never
+        // guesses the range itself (which ate the quotes in `Disabled="|"` and
+        // duplicated the token in `{Bind Dat|}`).
+        return new XamlCompletionResult(entries, doc.IdentifierSpanAt(line, column));
     }
 
     // Point lookup: resolve one element to its bound type — the inverse of

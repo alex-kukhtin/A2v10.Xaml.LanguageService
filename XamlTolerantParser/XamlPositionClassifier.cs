@@ -250,11 +250,11 @@ internal static class XamlPositionClassifier
 
     // -------- markup extension classification --------
 
-    // Cursor landed on a XamlExtension node — either the immediately-enclosing
-    // markup extension or inside its TypeName / interior whitespace. Also
-    // probes for `{...Name=|` (cursor right after a named arg's '=' with no
-    // value yet), where the named-arg's span ends at '=' and FindNodeAt would
-    // otherwise treat the cursor as plain extension interior.
+    // Cursor landed on a XamlExtension node — the immediately-enclosing markup
+    // extension, with the caret in its TypeName or in a gap of the argument area
+    // (whitespace, or just past a half-open argument span). Classifies the slot
+    // from STRUCTURE, never from the caret's exact adjacency to a token — so
+    // whitespace around the value or the '=' does not change the answer.
     private static XamlPositionContext ClassifyInExtension(
         XamlDocument doc, XamlExtension ext, Int32 offset, IReadOnlyList<XamlDiagnostic> diags)
     {
@@ -262,26 +262,41 @@ internal static class XamlPositionClassifier
         // Extension always lives under a XamlAttribute by construction.
         var element = attr.Owner!;
 
-        // (i) `Name=|` probe — value slot of a named arg whose value is null.
-        if (offset > 0 && doc.Source[offset - 1] == '=')
-        {
-            foreach (var a in ext.Arguments)
-            {
-                if (a is XamlNamedArgument na && na.EqualsSpan is { } eq && eq.End == offset)
-                    return new ExtensionArgValueContext(element, attr, ext, na, null, diags);
-            }
-        }
-
-        // (ii) Inside or immediately after the type name. For an empty type
-        //      name (`{|`) the only valid offset is right after '{'.
+        // (i) Inside or immediately after the type name. For an empty type name
+        //     (`{|`) the only valid offset is right after '{'.
         var typeEnd = ext.TypeNameSpan.Length > 0
             ? ext.TypeNameSpan.End
             : ext.OpenBraceSpan.End;
         if (offset > ext.OpenBraceSpan.Start && offset <= typeEnd)
             return new ExtensionTypeNameContext(element, attr, ext, diags);
 
-        // (iii) Anything else inside the extension — whitespace between args,
-        //       before '}', etc.
+        // (ii) Past the type name the caret is in the argument area. Decide the
+        //      slot by the governing separator to its LEFT, found structurally by
+        //      skipping the token under the caret and the whitespace around it
+        //      (so a stray space — `{Bind Type=D |}`, `{Bind Type= |}` — never
+        //      changes the answer; it is the *meaning* "which side of the '='",
+        //      not the caret touching a token). The scan stops at the open brace,
+        //      so `p` always lands at a defined boundary. Total by construction —
+        //      exactly two outcomes, both described:
+        var src = doc.Source;
+        var lo = ext.OpenBraceSpan.End;
+        var p = offset;
+        while (p > lo && Char.IsWhiteSpace(src[p - 1])) p--;
+        while (p > lo && IsNameChar(src[p - 1])) p--;
+        while (p > lo && Char.IsWhiteSpace(src[p - 1])) p--;
+
+        //   (a) a '=' to the left that a parsed named argument owns → we are in
+        //       that argument's value: offer values.
+        if (p > 0 && src[p - 1] == '=')
+            foreach (var a in ext.Arguments)
+                if (a is XamlNamedArgument na && na.EqualsSpan is { } eq && eq.End == p)
+                    return new ExtensionArgValueContext(element, attr, ext, na, na.Value, diags);
+
+        //   (b) everything else — no '=' (a ',' starting a new argument, the '{'
+        //       or type name with no argument yet), OR a '=' the parser produced no
+        //       named argument for (malformed, e.g. a '=' inside a positional
+        //       token): the name/interior slot, offering the argument names. This
+        //       is the deliberate catch-all, not an accidental fall-through.
         return new ExtensionInteriorContext(element, attr, ext, diags);
     }
 

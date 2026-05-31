@@ -113,6 +113,46 @@ public class ExtensionContextAtTests
         Assert.IsType<XamlExtensionStringValue>(ctx.Argument.Value);
     }
 
+    [Fact]
+    public void Right_after_named_arg_value_end_is_ArgValue()
+    {
+        //                  0         1         2
+        //                  0123456789012345678901234567
+        const string src = "<X Tag=\"{Bind DataType=D}\"/>";
+        var doc = Parse(src);
+        // Caret at col 24 — right after the value 'D' of the named arg
+        // DataType=D, at the '}'. This is the normal completion caret (value just
+        // typed, brace auto-closed). Must be ArgValue so VALUE completions show —
+        // not slide into Interior, which offers the extension's argument NAMES.
+        var ctx = Assert.IsType<ExtensionArgValueContext>(At(doc, 24));
+        Assert.IsType<XamlNamedArgument>(ctx.Argument);
+    }
+
+    [Fact]
+    public void Named_arg_value_with_trailing_space_is_still_ArgValue()
+    {
+        //                  0         1         2
+        //                  0123456789012345678901234567
+        const string src = "<X Tag=\"{Bind DataType=D }\"/>";
+        var doc = Parse(src);
+        // Caret at col 25 — after a space between the value 'D' and '}'. The slot
+        // is "right of this arg's '='", so whitespace must not demote it to
+        // Interior (the old exact-adjacency probe did exactly that).
+        Assert.IsType<ExtensionArgValueContext>(At(doc, 25));
+    }
+
+    [Fact]
+    public void Named_arg_empty_value_with_space_after_equals_is_ArgValue()
+    {
+        //                  0         1         2
+        //                  012345678901234567890123456
+        const string src = "<X Tag=\"{Bind DataType= }\"/>";
+        var doc = Parse(src);
+        // Caret at col 24 — after `= ` (space, no value yet). Still the value slot.
+        var ctx = Assert.IsType<ExtensionArgValueContext>(At(doc, 24));
+        Assert.Null(ctx.Value);
+    }
+
     // --- nested ------------------------------------------------------------
 
     [Fact]

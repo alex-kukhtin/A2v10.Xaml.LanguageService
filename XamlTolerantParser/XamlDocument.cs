@@ -89,4 +89,26 @@ public sealed class XamlDocument
         }
         return lineEnd;
     }
+
+    // The maximal run of identifier (name) characters around the caret — the token
+    // a completion would replace. A pure text scan, independent of the parse tree,
+    // so it is immune to the half-open-span quirk where a caret at a token's
+    // exclusive end resolves to the parent node. Zero-length at the caret when no
+    // name char touches it (a pure insertion). Name chars never span a line, so the
+    // walk stays on `line` and column deltas equal offset deltas.
+    public TextSpan IdentifierSpanAt(Int32 line, Int32 column)
+    {
+        var src = Source;
+        var caret = OffsetAt(line, column);
+        var start = caret;
+        while (start > 0 && IsNameChar(src[start - 1])) start--;
+        var end = caret;
+        while (end < src.Length && IsNameChar(src[end])) end++;
+        return new TextSpan(start, end - start, line, column - (caret - start), line, column + (end - caret));
+    }
+
+    // The XAML name-character set, shared by the lexer, the position classifier and
+    // the markup-extension parser: letters/digits plus the QName punctuation.
+    private static Boolean IsNameChar(Char c) =>
+        Char.IsLetterOrDigit(c) || c == '_' || c == '-' || c == '.' || c == ':';
 }
