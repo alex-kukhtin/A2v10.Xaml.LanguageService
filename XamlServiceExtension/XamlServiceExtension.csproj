@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+﻿<Project Sdk="Microsoft.NET.Sdk">
 	<PropertyGroup>
 		<TargetFramework>net8.0-windows8.0</TargetFramework>
 		<RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
@@ -7,6 +7,33 @@
 		<NoWarn>$(NoWarn);VSEXTPREVIEW_LSP</NoWarn>
 	</PropertyGroup>
 
+	
+	<ItemGroup>
+  <Content Include="extension.pkgdef">
+    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    <IncludeInVsix>true</IncludeInVsix>
+  </Content>
+
+  <Content Include="TextMateLaunch\language-configuration.json">
+    <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    <IncludeInVsix>true</IncludeInVsix>
+  </Content>
+</ItemGroup>
+	<ItemGroup>
+		<Content Include="extension.pkgdef">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<IncludeInVsix>true</IncludeInVsix>
+		</Content>
+
+		<Content Include="TextMateLaunch\language-configuration.json">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<IncludeInVsix>true</IncludeInVsix>
+		</Content>
+		<Content Include="TextMateLaunch\Syntaxes\vxaml.tmLanguage.json">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+			<IncludeInVsix>true</IncludeInVsix>
+		</Content>
+	</ItemGroup>
 	<ItemGroup>
 		<PackageReference Include="Microsoft.VisualStudio.Extensibility.Sdk" Version="17.14.40608" PrivateAssets="all" />
 		<PackageReference Include="Microsoft.VisualStudio.Extensibility.Build" Version="17.14.40608" PrivateAssets="all" />

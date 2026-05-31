@@ -104,14 +104,13 @@ public class ExtensionContextAtTests
     // --- positional argument ----------------------------------------------
 
     [Fact]
-    public void Inside_positional_value_is_ArgValue_positional()
+    public void Inside_positional_value_is_PositionalArg()
     {
         const string src = "<X Tag=\"{Binding Name}\"/>";
         var doc = Parse(src);
         // Column 19 — middle of "Name".
-        var ctx = Assert.IsType<ExtensionArgValueContext>(At(doc, 19));
-        Assert.IsType<XamlPositionalArgument>(ctx.Argument);
-        Assert.IsType<XamlExtensionStringValue>(ctx.Value);
+        var ctx = Assert.IsType<ExtensionPositionalArgContext>(At(doc, 19));
+        Assert.IsType<XamlExtensionStringValue>(ctx.Argument.Value);
     }
 
     // --- nested ------------------------------------------------------------
@@ -136,11 +135,10 @@ public class ExtensionContextAtTests
         const string src = "<X Tag=\"{Binding Source={StaticResource Foo}}\"/>";
         var doc = Parse(src);
         var col = src.IndexOf("Foo") + 1;
-        var ctx = Assert.IsType<ExtensionArgValueContext>(At(doc, col));
+        var ctx = Assert.IsType<ExtensionPositionalArgContext>(At(doc, col));
         // The inner extension is the immediately-enclosing one.
         Assert.Equal("StaticResource",
             src.Substring(ctx.Extension.TypeNameSpan.Start, ctx.Extension.TypeNameSpan.Length));
-        Assert.IsType<XamlPositionalArgument>(ctx.Argument);
     }
 
     // --- owner wiring ------------------------------------------------------
@@ -168,7 +166,7 @@ public class ExtensionContextAtTests
         var attr = elem.Attributes[0];
 
         var col = src.IndexOf("Foo") + 1;
-        var ctx = Assert.IsType<ExtensionArgValueContext>(At(doc, col));
+        var ctx = Assert.IsType<ExtensionPositionalArgContext>(At(doc, col));
         Assert.Same(elem, ctx.Element);
         Assert.Same(attr, ctx.Attribute);
     }

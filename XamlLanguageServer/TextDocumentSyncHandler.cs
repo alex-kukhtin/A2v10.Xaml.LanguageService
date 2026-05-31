@@ -53,6 +53,7 @@ internal class TextDocumentSyncHandler(
             var doc = _store.Set(r.TextDocument.Uri, full.Text);
             PublishDiagnostics(r.TextDocument.Uri, doc);
         }
+
         return Unit.Task;
     }
 

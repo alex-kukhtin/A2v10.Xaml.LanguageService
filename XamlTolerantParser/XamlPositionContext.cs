@@ -143,16 +143,31 @@ public sealed record ExtensionArgNameContext(
     IReadOnlyList<XamlDiagnostic> Diagnostics)
     : XamlPositionContext(Diagnostics);
 
-// Typing an argument value. Covers both named (`{Binding Path=Na|me}`,
-// `{Binding Path=|}`) and positional (`{Binding Na|me}`).
+// Typing the value of a *named* argument: `{Binding Path=Na|me}`,
+// `{Binding Path=|}`.
 //   Value is null when the user just typed `=` and nothing follows.
-//   Argument is XamlNamedArgument or XamlPositionalArgument — consumers
-//   pattern-match on it when they need to distinguish.
+// Positional arguments have their own variant (ExtensionPositionalArgContext)
+// so consumers dispatch on the variant alone — no pattern-match on Argument.
 public sealed record ExtensionArgValueContext(
     XamlElement Element,
     XamlAttribute Attribute,
     XamlExtension Extension,
-    XamlExtensionArgument Argument,
+    XamlNamedArgument Argument,
     XamlExtensionValue? Value,
+    IReadOnlyList<XamlDiagnostic> Diagnostics)
+    : XamlPositionContext(Diagnostics);
+
+// Cursor on a positional argument: `{Binding Na|me}`. A bare token is
+// syntactically a positional value, but vxaml has no real positional values —
+// the MS XAML editor treats this slot as an argument-name position and offers
+// the extension type's properties. Kept as its own variant (the parser tree
+// still distinguishes positional from named — that distinction is useful) so
+// completion dispatches on the variant without inspecting Argument.
+//   Value is reachable via Argument.Value (null for an empty positional slot).
+public sealed record ExtensionPositionalArgContext(
+    XamlElement Element,
+    XamlAttribute Attribute,
+    XamlExtension Extension,
+    XamlPositionalArgument Argument,
     IReadOnlyList<XamlDiagnostic> Diagnostics)
     : XamlPositionContext(Diagnostics);

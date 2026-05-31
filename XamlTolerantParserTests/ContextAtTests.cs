@@ -122,6 +122,38 @@ public class ContextAtTests
         Assert.Same(doc.Roots[0], ctx.Element);
     }
 
+    // --- Probing the real mid-typing shapes (partial name-only attribute) ---
+
+    [Fact]
+    public void Partial_attr_name_at_eof_is_AttributeName()
+    {
+        //                  012345678901
+        const string src = "<Button Wi";
+        var doc = Parse(src);
+        // Column 10 — right after "Wi", the exclusive end of the attribute span.
+        Assert.IsType<AttributeNameContext>(At(doc, 10));
+    }
+
+    [Fact]
+    public void Partial_attr_name_before_selfclose_is_AttributeName()
+    {
+        //                  0123456789012345
+        const string src = "<Button Wi />";
+        var doc = Parse(src);
+        // Column 10 — right after "Wi", before the trailing space.
+        Assert.IsType<AttributeNameContext>(At(doc, 10));
+    }
+
+    [Fact]
+    public void Empty_interior_slot_is_TagInterior_not_AttributeName()
+    {
+        //                  0123456789012
+        const string src = "<Button  />";
+        var doc = Parse(src);
+        // Column 8 — the second space, no name being typed.
+        Assert.IsType<TagInteriorContext>(At(doc, 8));
+    }
+
     [Fact]
     public void Inside_attribute_value_is_AttributeValue()
     {

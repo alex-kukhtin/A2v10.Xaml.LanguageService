@@ -3,26 +3,29 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
 
 namespace XamlLanguageServer;
 
-// Server-lifetime singleton. Owns the MetadataLoadContext, discovers @assemblies
-// folders above open .vxaml files, and serves up each requested assembly wrapped
-// in XamlAssembly (which owns the namespace → type index).
+// Server-lifetime singleton. Discovers @assemblies folders above open .vxaml files
+// and serves each requested assembly wrapped in XamlAssembly (which owns the
+// namespace -> type index, read straight from metadata).
 //
 // Convention: each project tree has a folder named "@assemblies" somewhere above
-// the .vxaml files; that folder contains the DLLs whose types the vxaml dialect
-// references (A2v10.Xaml + friends). The resolver walks up from a vxaml path once
-// per file to discover the folder; the discovered anchor (directory CONTAINING
-// the @assemblies folder) is remembered so future vxaml files in the same subtree
-// hit it via StartsWith without re-walking.
+// the .vxaml files; it holds the DLLs whose types the vxaml dialect references
+// (A2v10.Xaml + friends). The resolver walks up from a vxaml path once per file to
+// find the folder; the discovered anchor (directory CONTAINING @assemblies) is
+// remembered so future files in the same subtree hit it via StartsWith without
+// re-walking.
 //
-// MetadataLoadContext is reflection-only: no type initializers run, no file lock
-// on the DLLs (so the user can rebuild their A2v10.Xaml.dll without killing VS),
-// no AppDomain pollution.
-internal sealed class AssemblyResolver : MetadataAssemblyResolver, IDisposable
+// No MetadataLoadContext, no reflection: an assembly is read by copying its bytes
+// once and handing them to a PEReader / MetadataReader. Because we read the bytes
+// rather than memory-mapping the file, the DLL is never locked — the user can
+// rebuild A2v10.Xaml.dll without killing VS — and no referenced (system) assembly
+// is ever needed, since we only read names from this file's own tables.
+internal sealed class AssemblyResolver : IDisposable
 {
     private const String FolderName = "@assemblies";
 
@@ -30,39 +33,7 @@ internal sealed class AssemblyResolver : MetadataAssemblyResolver, IDisposable
     private readonly HashSet<String> _folders = new(StringComparer.OrdinalIgnoreCase); // @assemblies paths
     private readonly Dictionary<String, XamlAssembly> _loaded =
         new(StringComparer.OrdinalIgnoreCase);
-    private readonly MetadataLoadContext _context;
     private readonly Object _lock = new();
-
-    public AssemblyResolver()
-    {
-        _context = new MetadataLoadContext(this);
-    }
-
-    // Called by MLC whenever it needs to find an assembly — both explicit
-    // LoadFromAssemblyName from GetAssembly and implicit cross-assembly refs.
-    // @assemblies wins over the runtime directory so a user DLL named like a
-    // system one would shadow it (rare but possible). The runtime-directory
-    // fallback is mandatory: MLC probes for "mscorlib" during construction and
-    // throws if no path comes back.
-    public override Assembly? Resolve(MetadataLoadContext context, AssemblyName name)
-    {
-        var rd = RuntimeEnvironment.GetRuntimeDirectory();
-
-        lock (_lock)
-        {
-            foreach (var folder in _folders)
-            {
-                var path = Path.Combine(folder, $"{name.Name}.dll");
-                if (File.Exists(path))
-                    return context.LoadFromAssemblyPath(path);
-            }
-
-            var rtPath = Path.Combine(rd, $"{name.Name}.dll");
-            if (File.Exists(rtPath))
-                return context.LoadFromAssemblyPath(rtPath);
-            return null;
-        }
-    }
 
     // Ensures the @assemblies folder above this .vxaml file (if any) is registered.
     // Idempotent and cheap: subsequent calls for files in the same subtree match an
@@ -87,30 +58,42 @@ internal sealed class AssemblyResolver : MetadataAssemblyResolver, IDisposable
         }
     }
 
-    // Loads an assembly by name and wraps it in XamlAssembly. Result is cached
-    // by assembly name. No negative caching: a miss leaves the cache untouched
-    // so a later EnsureFolderFor can succeed without invalidation.
+    // Loads an assembly by name and wraps it in XamlAssembly. Cached by name. No
+    // negative caching: a miss leaves the cache untouched so a later EnsureFolderFor
+    // can succeed without invalidation.
     public XamlAssembly? GetAssembly(String name)
     {
         lock (_lock)
         {
             if (_loaded.TryGetValue(name, out var existing))
                 return existing;
-            try
-            {
-                var asm = _context.LoadFromAssemblyName(new AssemblyName(name));
-                var wrapped = new XamlAssembly(asm);
-                _loaded[name] = wrapped;
-                return wrapped;
-            }
-            catch (FileNotFoundException)
-            {
+
+            var path = FindDll(name);
+            if (path == null)
                 return null;
-            }
+
+            var bytes = File.ReadAllBytes(path);
+            using var pe = new PEReader(ImmutableCollectionsMarshal.AsImmutableArray(bytes));
+            var wrapped = new XamlAssembly(pe.GetMetadataReader());
+            _loaded[name] = wrapped;
+            return wrapped;
         }
     }
 
-    public void Dispose() => _context.Dispose();
+    public void Dispose()
+    {
+    }
+
+    private String? FindDll(String name)
+    {
+        foreach (var folder in _folders)
+        {
+            var path = Path.Combine(folder, $"{name}.dll");
+            if (File.Exists(path))
+                return path;
+        }
+        return null;
+    }
 
     private static String? FindAnchor(String vxamlPath)
     {

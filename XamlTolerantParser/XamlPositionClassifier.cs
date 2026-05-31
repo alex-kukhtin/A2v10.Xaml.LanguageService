@@ -86,6 +86,21 @@ internal static class XamlPositionClassifier
             return new EndTagNameContext(elem, diagnostics);
         }
 
+        // (2c) Attribute-name probe. A value-less attribute's span ends at its
+        //      name, so a cursor at the name's exclusive End (`<Button Wi|`) —
+        //      or past every span at EOF — misses the attribute node:
+        //      FindNodeAt returns the owning element or null, which would
+        //      misroute to TagInterior / Outside. When name-chars sit to the
+        //      left (and it is not a tag name, handled by 2b above), retry one
+        //      column back to recover the partial attribute.
+        if (offset > 0 && IsNameChar(doc.Source[offset - 1]))
+        {
+            var attr = node as XamlAttribute
+                ?? (column > 0 ? doc.FindNodeAt(line, column - 1) as XamlAttribute : null);
+            if (attr != null)
+                return new AttributeNameContext(attr.Owner!, attr, diagnostics);
+        }
+
         // (3) Node-type switch.
         return node switch
         {
@@ -290,7 +305,7 @@ internal static class XamlPositionClassifier
         var ext = (XamlExtension)pa.Parent!;
         var attr = FindOwningAttribute(ext);
         var element = attr.Owner!;
-        return new ExtensionArgValueContext(element, attr, ext, pa, pa.Value, diags);
+        return new ExtensionPositionalArgContext(element, attr, ext, pa, diags);
     }
 
     private static XamlPositionContext ClassifyOnStringValue(
@@ -300,7 +315,11 @@ internal static class XamlPositionClassifier
         var ext = (XamlExtension)arg.Parent!;
         var attr = FindOwningAttribute(ext);
         var element = attr.Owner!;
-        return new ExtensionArgValueContext(element, attr, ext, arg, sv, diags);
+        // The argument kind decides the variant — the classifier owns this
+        // discrimination so consumers never inspect Argument.
+        return arg is XamlPositionalArgument pa
+            ? new ExtensionPositionalArgContext(element, attr, ext, pa, diags)
+            : new ExtensionArgValueContext(element, attr, ext, (XamlNamedArgument)arg, sv, diags);
     }
 
     // Walks the Parent chain past any number of nested-extension layers

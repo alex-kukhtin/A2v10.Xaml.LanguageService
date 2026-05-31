@@ -37,57 +37,156 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
     // variant. Empty list = nothing to suggest. Position is LSP-shaped
     // (0-based line, 0-based UTF-16 column).
     //
-    // Skeleton step: every arm returns nothing for now. Each will be filled
-    // in turn:
-    //   TagName                       → root element tags
-    //   ChildTagName / ElementContent → child element tags of the container
-    //   TagInterior / AttributeName   → settable properties of the element
-    //   AttributeValue                → enum / bool values
-    //   ExtensionTypeName             → markup-extension types
-    //   ExtensionInterior / ArgName   → extension-type properties (named args)
-    //   ExtensionArgValue             → enum / bool values
+    // Arm → offering:
+    //   TagName                          → root element tags
+    //   ChildTagName / ElementContent    → child element tags of the container
+    //   AttributeName                    → settable properties of the element
+    //   ExtensionTypeName                → markup-extension types
+    //   ExtensionInterior / ArgName /    → the extension type's properties
+    //     PositionalArg                    (every "argument name" slot)
+    // Empty for now (value slots — enum / bool / converter values land later):
+    //   AttributeValue, ExtensionArgValue (named-arg value).
+    // TagInterior is intentionally empty — the empty interior slot stays quiet;
+    // typing an attribute name routes to AttributeName instead (see CLAUDE.md
+    // "Position classification", the attribute-name probe).
     // Outside / Text / Comment / CData / EndTagName offer nothing (the `_` arm).
     public IReadOnlyList<XamlCompletionEntry> Complete(XamlDocument doc, Int32 line, Int32 column)
     {
         var ctx = doc.ContextAt(line, column);
         return ctx switch
         {
-            TagNameContext             => RootEntries(doc, ctx),
-            ChildTagNameContext        => ContentEntries(doc, ctx),
-            ElementContentContext      => ContentEntries(doc, ctx),
-            TagInteriorContext         => [],
-            AttributeNameContext       => [],
-            AttributeValueContext      => [],
-            ExtensionTypeNameContext   => [],
-            ExtensionInteriorContext   => [],
-            ExtensionArgNameContext    => [],
-            ExtensionArgValueContext   => [],
-            _                          => [],
-        };
+            TagNameContext => RootEntries(doc),
+            ChildTagNameContext ctn => ContentEntries(doc, ctn.Container),
+            ElementContentContext ecc => ContentEntries(doc, ecc.Element),
+            TagInteriorContext => [],
+            AttributeNameContext anc => PropertyEntries(ResolveType(doc, anc.Element)),
+            AttributeValueContext => [],
+            ExtensionTypeNameContext => ExtensionTypeEntries(doc),
+            ExtensionInteriorContext eic => ExtensionPropertyEntries(doc, eic.Extension),
+            ExtensionArgNameContext ean => ExtensionPropertyEntries(doc, ean.Extension),
+            ExtensionPositionalArgContext epc => ExtensionPropertyEntries(doc, epc.Extension),
+            ExtensionArgValueContext => [],
+            _ => [],
+        }; 
+    }
+
+    // Point lookup: resolve one element to its bound type — the inverse of
+    // ReachableTypes' enumeration. The name comes from OpenNameSpan; the
+    // qualified-name overload below does the prefix work.
+    public FullXamlType? ResolveType(XamlDocument doc, XamlElement element)
+        => ResolveType(doc, doc.TextOf(element.OpenNameSpan));
+
+    // Resolve a qualified type name (`my:Grid`, or bare `Grid` for the default
+    // binding): split on ':', map the prefix through the document's ClrPrefixes
+    // to (assembly, namespace), and ask the resolver. Returns null when the
+    // prefix is unbound, the assembly is missing from @assemblies, or the type
+    // is not found.
+    public FullXamlType? ResolveType(XamlDocument doc, String qualified)
+    {
+        var colon = qualified.IndexOf(':');
+        var prefix = colon < 0 ? String.Empty : qualified[..colon];
+        var localName = colon < 0 ? qualified : qualified[(colon + 1)..];
+
+        if (!doc.ClrPrefixes.TryGetValue(prefix, out var coords))
+            return null;
+
+        var asm = _resolver.GetAssembly(coords.asm);
+        var type = asm?.GetType(coords.ns, localName);
+        return type == null ? null : new FullXamlType(type, prefix);
     }
 
     private static XamlCompletionEntry CreateCompletionTag(FullXamlType xt)
-        => new XamlCompletionEntry(xt.QualifiedName, XamlCompletionKind.Tag, "Xaml element");
+        => new(xt.QualifiedName, XamlCompletionKind.Tag, "Xaml element");
 
     // Tags valid as a document root — types deriving from RootContainer.
     // Label is prefix-qualified (`my:Page`) for a non-default binding. We
     // enumerate the full candidate set rather than point-look-up the partial
     // name under the cursor: the editor filters as the user types, and looking
     // up an in-progress name would just miss — see project_completion_no_partial_lookup.
-    private IReadOnlyList<XamlCompletionEntry> RootEntries(XamlDocument doc, XamlPositionContext ctx)
+    private IReadOnlyList<XamlCompletionEntry> RootEntries(XamlDocument doc)
     {
-        var rt = ReachableTypes(doc).ToList();
-        return ReachableTypes(doc)
+        return [.. ReachableTypes(doc)
             .Where(x => x.Type.IsRootElement)
-            .Select(CreateCompletionTag)
-            .ToList();
+            .Select(CreateCompletionTag)];
     }
 
-    private IReadOnlyList<XamlCompletionEntry> ContentEntries(XamlDocument doc, XamlPositionContext ctx)
+    private IReadOnlyList<XamlCompletionEntry> ExtensionTypeEntries(XamlDocument doc)
     {
-        return ReachableTypes(doc)
-            .Where(x => !x.Type.IsMarkupExtension && !x.Type.IsRootElement)
-            .Select(CreateCompletionTag)
-            .ToList();
+        return [.. ReachableTypes(doc)
+            .Where(x => x.Type.IsMarkupExtension)
+            .Select(CreateCompletionTag)];
     }
+
+    private IReadOnlyList<XamlCompletionEntry> ContentEntries(XamlDocument doc, XamlElement container)
+    {
+        var name = doc.TextOf(container.OpenNameSpan);
+
+        // Property element <Owner.Property> — its children are the items of that
+        // property's collection. Split on the first dot; the owner part may
+        // itself be prefix-qualified (my:Table.Header).
+        var dot = name.IndexOf('.');
+        if (dot >= 0)
+            return PropertyElementEntries(doc, name[..dot], name[(dot + 1)..]);
+
+        var containerType = ResolveType(doc, container);
+
+        Boolean IsVisible(FullXamlType f)
+        {
+            var t = f.Type;
+            // Never valid as a child element, whatever the container is.
+            if (t.IsRootElement || t.IsMarkupExtension)
+                return false;
+            // A typed content model is authoritative: the container's element
+            // type decides, and the coarse IsUiElement role filter steps aside
+            // (a typed child like TableRow need not itself be a UIElement).
+            if (containerType != null && containerType.Type.HasTypedContent)
+                return containerType.Type.IsVisibleIn(t);
+            // Unconstrained model — fall back to the coarse role filter, still
+            // honouring the container's convention (Inlines → IsInline).
+            return t.IsUiElement
+                && (containerType == null || containerType.Type.IsVisibleIn(t));
+        }
+
+        return [.. ReachableTypes(doc)
+            .Where(IsVisible)
+            .Select(CreateCompletionTag)];
+    }
+
+    // Children inside a property element <Owner.Property>: valid only when
+    // Property is a collection (XamlProperty.ContentElementType != null) — its
+    // item type constrains the children exactly like a typed content model.
+    // Scalar property elements (<Button.Content>) and unknown owners/properties
+    // offer nothing for now (see CLAUDE.md "What still needs to be built").
+    private IReadOnlyList<XamlCompletionEntry> PropertyElementEntries(
+        XamlDocument doc, String ownerName, String propertyName)
+    {
+        var owner = ResolveType(doc, ownerName);
+        var elementType = owner?.Type.Properties
+            .FirstOrDefault(p => p.Name == propertyName)?.ContentElementType;
+        if (elementType == null)
+            return [];
+
+        return [.. ReachableTypes(doc)
+            .Where(f => f.Type.IsAChild(elementType))
+            .Select(CreateCompletionTag)];
+    }
+
+    // Settable properties of a resolved type, as attribute-name completion
+    // entries. Shared by the attribute-name slot (`<Button Wi|`) and the
+    // markup-extension argument-name slots (`{Binding |}`, `{Binding Pa|th}`):
+    // all three offer the owner type's properties and differ only in how the
+    // owner is resolved (element name vs extension type name). Null owner —
+    // unbound prefix, missing assembly, unknown type — offers nothing.
+    private static IReadOnlyList<XamlCompletionEntry> PropertyEntries(FullXamlType? owner)
+    {
+        if (owner == null)
+            return [];
+        return [.. owner.Type.Properties
+            .Select(p => new XamlCompletionEntry(p.Name, XamlCompletionKind.Attribute, "Xaml Property"))];
+    }
+
+    // Properties of the type named by a markup extension (`{Binding |}` →
+    // Binding's properties), resolved through the extension's TypeNameSpan.
+    private IReadOnlyList<XamlCompletionEntry> ExtensionPropertyEntries(XamlDocument doc, XamlExtension ext)
+        => PropertyEntries(ResolveType(doc, doc.TextOf(ext.TypeNameSpan)));
 }

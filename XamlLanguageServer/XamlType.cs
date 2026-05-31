@@ -2,16 +2,15 @@
 
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 
 namespace XamlLanguageServer;
 
-// XAML-level view of a CLR type, independent of any document: the roles it
-// plays in the dialect (derived once from its base-type chain — see
-// XamlTypeRole) plus its publicly settable properties. The xmlns prefix is
-// NOT here — that is a per-document binding, applied when completion entries
-// are built. The underlying System.Type is held privately; consumers should
-// never reach for it.
+// XAML-level view of a type, independent of any document: the dialect roles it
+// plays, its base/interface names (by simple name), the content-property element
+// type, and its settable properties. Pure data — nothing here holds a live
+// System.Type or metadata handle; everything was read by name from the assembly's
+// metadata tables when the XamlAssembly index was built. The xmlns prefix is NOT
+// here — that is a per-document binding (see FullXamlType).
 
 [Flags]
 internal enum XamlTypeRole
@@ -19,52 +18,62 @@ internal enum XamlTypeRole
     None = 0,
     RootElement = 1,
     MarkupExtension = 2,
+    UiElement = 4,
+    Inline = 8,
 }
 
-internal sealed class XamlType
+internal sealed class XamlType(
+    String name,
+    XamlTypeRole role,
+    HashSet<String> baseNames,
+    String? contentProperty,
+    String? contentPropertyType,
+    XamlProperty[] properties,
+    String[]? attachedProperties)
 {
-    private readonly Type _type;
-    private readonly XamlTypeRole _role;
-    private XamlProperty[]? _properties;
+    private readonly XamlTypeRole _role = role;
+    // Simple names of every base class (within and across the file boundary, as
+    // far as the metadata could be read) plus directly-declared dialect
+    // interfaces. The membership set behind IsA.
+    private readonly HashSet<String> _baseNames = baseNames;
 
+    public String Name { get; } = name;
+    public String? ContentProperty { get; } = contentProperty;
+    public String? ContentPropertyType { get; } = contentPropertyType;
+    public XamlProperty[] Properties { get; } = properties;
 
-    private static readonly Dictionary<String, XamlTypeRole> _map_roles = new(StringComparer.Ordinal)
-    {
-        ["RootContainer"] = XamlTypeRole.RootElement,
-        ["Dictionary`2"] = XamlTypeRole.RootElement,
-        ["MarkupExtension"] = XamlTypeRole.MarkupExtension
-    };
-
-    public XamlType(Type type)
-    {
-        _type = type;
-        Name = type.Name;
-
-        XamlTypeRole role = XamlTypeRole.None;
-        for (var b = type.BaseType; b != null; b = b.BaseType)
-        {
-            if (_map_roles.TryGetValue(b.Name, out var fRole))
-                role |= fRole;
-        }
-        _role = role;
-    }
-
-    public String Name { get; }
     public Boolean IsRootElement => _role.HasFlag(XamlTypeRole.RootElement);
     public Boolean IsMarkupExtension => _role.HasFlag(XamlTypeRole.MarkupExtension);
+    public Boolean IsUiElement => _role.HasFlag(XamlTypeRole.UiElement);
+    public Boolean IsInline => _role.HasFlag(XamlTypeRole.Inline);
 
-    public XamlProperty[] Properties => _properties ??= BuildProperties();
+    // The content property carries a concrete element type that constrains valid
+    // children (a typed collection like TableRowCollection : List<TableRow>, or a
+    // single typed value). When true, IsVisibleIn is the sole authority and the
+    // coarse IsUiElement role filter must step aside. Object / null means the
+    // model is unconstrained — fall back to convention.
+    public Boolean HasTypedContent => ContentPropertyType != null && ContentPropertyType != "Object";
 
-    private XamlProperty[] BuildProperties()
+    // True when this type may sit as a child element under a content model whose
+    // element type is `name`: it is `name`, or carries it anywhere in its
+    // base-class chain or implemented interfaces (by simple name — the same
+    // by-name convention the role map uses), AND is itself usable as a child.
+    // Root elements and markup extensions can never sit inside a container, so
+    // that exclusion is folded in here rather than repeated at every call site.
+    internal Boolean IsAChild(String name) =>
+        !IsRootElement && !IsMarkupExtension && (Name == name || _baseNames.Contains(name));
+
+    internal Boolean IsVisibleIn(XamlType type)
     {
-        var infos = _type.GetProperties(BindingFlags.Public | BindingFlags.Instance);
-        var list = new List<XamlProperty>(infos.Length);
-        foreach (var p in infos)
-        {
-            if (!p.CanWrite)
-                continue;
-            list.Add(new XamlProperty(p));
-        }
-        return list.ToArray();
+        // Typed content collection (Rows : TableRowCollection : List<TableRow>):
+        // only children that are, or derive from, the element type are valid.
+        if (HasTypedContent)
+            return type.IsAChild(ContentPropertyType!);
+
+        // Unconstrained (Object / mixed) content — fall back to dialect
+        // convention until a richer content model is wired.
+        if (ContentProperty == "Inlines")
+            return type.IsInline;
+        return true;
     }
 }
