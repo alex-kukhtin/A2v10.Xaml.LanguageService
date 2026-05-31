@@ -9,6 +9,10 @@ using OmniSharp.Extensions.LanguageServer.Protocol.Client.Capabilities;
 using OmniSharp.Extensions.LanguageServer.Protocol.Document;
 using OmniSharp.Extensions.LanguageServer.Protocol.Models;
 
+using XamlTolerantParser;
+
+using Range = OmniSharp.Extensions.LanguageServer.Protocol.Models.Range;
+
 namespace XamlLanguageServer;
 
 internal class CompletionHandler(
@@ -54,16 +58,25 @@ internal class CompletionHandler(
         if (doc == null)
             return Task.FromResult(new CompletionList());
 
-        var items = _provider.Complete(doc, request.Position.Line, request.Position.Character)
+        var result = _provider.Complete(doc, request.Position.Line, request.Position.Character);
+        // One edit range for the whole response: the server owns the replaced
+        // token (from the position context) so the editor never guesses it. Plain
+        // single-range TextEdit — InsertReplaceSupport is false (see XamlLangServer).
+        var range = ToRange(result.EditSpan);
+        var items = result.Entries
             .Select(e => new CompletionItem
             {
                 Label = e.Label,
                 Kind = MapKind(e.Kind),
                 Detail = e.Detail,
+                TextEdit = new TextEdit { Range = range, NewText = e.Label },
             })
             .ToArray();
         return Task.FromResult(new CompletionList(items));
     }
+
+    private static Range ToRange(TextSpan span) =>
+        new(span.StartLine, span.StartColumn, span.EndLine, span.EndColumn);
 
     private static CompletionItemKind MapKind(XamlCompletionKind kind) => kind switch
     {
@@ -83,6 +96,7 @@ internal class CompletionHandler(
         {
             DocumentSelector = TextDocumentSelector.ForPattern("**/*.vxaml"),
             TriggerCharacters = new Container<String>(["<"]),
+            AllCommitCharacters = new Container<String>(["=", "/", ">", " ", "}"]),
             ResolveProvider = false,
         };
 }

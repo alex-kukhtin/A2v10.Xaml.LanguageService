@@ -192,6 +192,73 @@ public class EditAtTests
         Assert.Null(doc.EditAt(0, 8, '>'));
     }
 
+    // ---- auto-closing pairs ('"' '\'' '`' '{') ---------------------------
+    // Dumb pair-completion: insert the closing counterpart at the caret, anywhere,
+    // no context analysis. Empty Replace at the caret => caret stays between the
+    // pair.
+
+    [Fact]
+    public void Quote_opening_attribute_value_inserts_closing_quote()
+    {
+        //                  0         1
+        //                  012345678901234567
+        const string src = "<Button Disabled=\"";
+        var doc = Parse(src);
+        var edit = doc.EditAt(0, src.Length, '"');
+        Assert.NotNull(edit);
+        Assert.Equal("\"", edit!.NewText);
+        // Empty Replace at the caret -> caret stays to the left (between quotes).
+        Assert.Equal(src.Length, edit.Replace.Start);
+        Assert.Equal(0, edit.Replace.Length);
+        Assert.Equal(src.Length, edit.Replace.StartColumn);
+        Assert.Equal(src.Length, edit.Replace.EndColumn);
+    }
+
+    [Fact]
+    public void Brace_inserts_closing_brace()
+    {
+        //                  0         1
+        //                  012345678901234567
+        const string src = "<Button Cmd=\"{";
+        var doc = Parse(src);
+        var edit = doc.EditAt(0, src.Length, '{');
+        Assert.NotNull(edit);
+        Assert.Equal("}", edit!.NewText);
+        Assert.Equal(0, edit.Replace.Length);
+        Assert.Equal(src.Length, edit.Replace.StartColumn);
+    }
+
+    [Fact]
+    public void Single_quote_inserts_closing_single_quote()
+    {
+        const string src = "<a b='";
+        var doc = Parse(src);
+        var edit = doc.EditAt(0, src.Length, '\'');
+        Assert.NotNull(edit);
+        Assert.Equal("'", edit!.NewText);
+    }
+
+    [Fact]
+    public void Backtick_inserts_closing_backtick()
+    {
+        const string src = "<a>`";
+        var doc = Parse(src);
+        var edit = doc.EditAt(0, src.Length, '`');
+        Assert.NotNull(edit);
+        Assert.Equal("`", edit!.NewText);
+    }
+
+    [Fact]
+    public void Pair_fires_anywhere_even_in_plain_text()
+    {
+        // No context analysis: a quote in text content auto-closes just the same.
+        const string src = "<a>x\"";
+        var doc = Parse(src);
+        var edit = doc.EditAt(0, src.Length, '"');
+        Assert.NotNull(edit);
+        Assert.Equal("\"", edit!.NewText);
+    }
+
     // ---- multi-line & misc ----------------------------------------------
 
     [Fact]

@@ -243,6 +243,22 @@ The path of the vxaml file is needed exactly once — on `didOpen`/`didChange`, 
 - **Value completion beyond enums** — bool (`True`/`False`) and known type-converter values; only enums are wired in `XamlProperty`.
 - **`TextEdit` / replacement ranges** — entries return bare `Label`. Prefixed names (`x:Name`, `my:Button`) may need explicit ranges because `:` is a word boundary in VS.
 
+### Attribute-driven enrichment (planned) — `[Description]`, `[Browsable(false)]`
+
+These attributes are authored on the dialect classes/properties in `A2v10.Xaml.dll` and read through the **existing custom-attribute path** (`ReadCustomAttribute` / `AttributeTypeName`) — no new infrastructure, the metadata reader already decodes string/bool ctor args. They are a **consumer-facing** channel, deliberately separate from XML-doc (`///`): XML-doc is written for the library *developer* (inheritance, C# semantics), whereas the audience here is the *vxaml author* — so the text is net-new authoring, not reused dev docs. See [memory: descriptions are consumer-facing](/.claude/memory/project_descriptions_consumer_facing.md). Both attributes live in the controlled package, consistent with the "stable controlled package" assumption — and both degrade silently when absent, so adoption can be incremental.
+
+**`[Description("…")]` → hover + completion detail.**
+- Read at type level via `ReadCustomAttribute(reader, td, "Description")` (already shaped for the string ctor arg); at property level via `pd.GetCustomAttributes()` inside `ReadSettableProperties`.
+- New `Description` (`String?`) on `XamlType` and `XamlProperty`.
+- Consumers: replaces the placeholder `Detail` on `XamlCompletionEntry` (the `"Xaml element"` / `"Xaml Property"` clichés — drop them, see [memory: copy style](/.claude/memory/feedback_copy_style.md)), and feeds the planned `HoverService` (plaintext-only under VS 2026 — see client capabilities). A null `Description` ⇒ no detail / no hover, degrades silently.
+
+**`[Browsable(false)]` → hide from completion.**
+- New `IsBrowsable` (`Boolean`, default `true`) on `XamlType` and `XamlProperty`, folded from the attribute's bool ctor arg.
+- Applied as a **completion filter only**, at the entry builders: `PropertyEntries` skips non-browsable properties; `RootEntries` / `ContentEntries` / `ExtensionTypeEntries` skip non-browsable types. It is a *hint to hide*, not a validity rule — a `[Browsable(false)]` member typed explicitly is still legal, so it never drives a diagnostic.
+- Keep the filter in the entry builders, **not** in `ReachableTypes` / `ReadSettableProperties` — those stay the unfiltered building blocks (tests and other consumers want the full set).
+
+**Door this opens (not in this step).** The same attribute-reading path generalises to validation: `[Obsolete("…")]` → a warning diagnostic on use; `[Required]` / range attributes → attribute-value checks. Add these only when the attributes actually appear in the library — don't build ahead of the metadata (see [memory: typical over exhaustive](/.claude/memory/feedback_typical_over_exhaustive.md)).
+
 ---
 
 ## DI & services

@@ -12,7 +12,9 @@ using XamlTolerantParser;
 namespace XamlLanguageServer;
 
 // On-type auto-edits: '>' inserts the matching close tag, '/' completes a
-// self-closing tag. The position logic lives in XamlDocument.EditAt; this handler
+// self-closing tag, and the opening characters '"' '\'' '`' '{' auto-insert their
+// closing counterpart (dumb pair-completion, fires anywhere). The position logic
+// lives in XamlDocument.EditAt; this handler
 // only adapts LSP <-> the parser's neutral XamlTypingEdit. The caret is implied by
 // the edit shape — VS 2026 honours it (see XamlLangServer capability notes).
 internal class OnTypeFormattingHandler(DocumentStore _store) : IDocumentOnTypeFormattingHandler
@@ -43,7 +45,7 @@ internal class OnTypeFormattingHandler(DocumentStore _store) : IDocumentOnTypeFo
         {
             DocumentSelector = TextDocumentSelector.ForPattern("**/*.vxaml"),
             FirstTriggerCharacter = ">",
-            MoreTriggerCharacter = new Container<string>("/"),
+            MoreTriggerCharacter = new Container<string>("/", "\"", "'", "`", "{"),
         };
 
     private static Range ToRange(TextSpan span) =>

@@ -249,6 +249,17 @@ internal sealed class XamlAssembly
         return false;
     }
 
+    // A Nullable<T> property is a generic instance of System.Nullable (named
+    // "Nullable`1" in metadata); unwrap to the single type argument so a
+    // Boolean? reads as Boolean and a same-file enum keeps the TypeDefinition
+    // handle its members are read from. Non-Nullable types pass through.
+    private static MetaTypeRef UnwrapNullable(MetaTypeRef type) =>
+        type.IsGenericInstance && type.Namespace == "System"
+            && type.Name.StartsWith("Nullable", StringComparison.Ordinal)
+            && type.GenericArgs.Count == 1
+            ? type.GenericArgs[0]
+            : type;
+
     private static Boolean TryGetSingleGenericArg(MetaTypeRef type, out String name)
     {
         if (type.IsGenericInstance && type.GenericArgs.Count == 1)
@@ -287,7 +298,11 @@ internal sealed class XamlAssembly
                 if (!HasPublicAccessor(reader, accessors))
                     continue;
 
-                var propType = pd.DecodeSignature(_sig, null).ReturnType;
+                // Unwrap Nullable<T> (Boolean?, SomeEnum?) to its underlying T:
+                // completion cares about the bool-ness / enum members of T, not
+                // the wrapper. Only value types are ever Nullable, so the
+                // collection / delegate checks below are unaffected.
+                var propType = UnwrapNullable(pd.DecodeSignature(_sig, null).ReturnType);
                 // Delegate-typed members (Action, Action<…> — the latter named
                 // "Action`1" etc. in metadata) are code callbacks, never XAML
                 // attributes; keep them out of completion (and out of the dedup

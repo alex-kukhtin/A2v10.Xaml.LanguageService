@@ -44,30 +44,57 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
     //   ExtensionTypeName                → markup-extension types
     //   ExtensionInterior / ArgName /    → the extension type's properties
     //     PositionalArg                    (every "argument name" slot)
-    // Empty for now (value slots — enum / bool / converter values land later):
-    //   AttributeValue, ExtensionArgValue (named-arg value).
+    //   AttributeValue / ExtensionArgValue → the property's enum members, or
+    //     (named-arg value)                  True/False for a Boolean property.
     // TagInterior is intentionally empty — the empty interior slot stays quiet;
     // typing an attribute name routes to AttributeName instead (see CLAUDE.md
     // "Position classification", the attribute-name probe).
     // Outside / Text / Comment / CData / EndTagName offer nothing (the `_` arm).
-    public IReadOnlyList<XamlCompletionEntry> Complete(XamlDocument doc, Int32 line, Int32 column)
+    public XamlCompletionResult Complete(XamlDocument doc, Int32 line, Int32 column)
     {
         var ctx = doc.ContextAt(line, column);
-        return ctx switch
+        var entries = ctx switch
         {
             TagNameContext => RootEntries(doc),
             ChildTagNameContext ctn => ContentEntries(doc, ctn.Container),
             ElementContentContext ecc => ContentEntries(doc, ecc.Element),
             TagInteriorContext => [],
             AttributeNameContext anc => PropertyEntries(ResolveType(doc, anc.Element)),
-            AttributeValueContext => [],
+            AttributeValueContext avc => ValueEntries(ResolveType(doc, avc.Element), doc.TextOf(avc.Attribute.NameSpan)),
             ExtensionTypeNameContext => ExtensionTypeEntries(doc),
             ExtensionInteriorContext eic => ExtensionPropertyEntries(doc, eic.Extension),
             ExtensionArgNameContext ean => ExtensionPropertyEntries(doc, ean.Extension),
             ExtensionPositionalArgContext epc => ExtensionPropertyEntries(doc, epc.Extension),
-            ExtensionArgValueContext => [],
+            ExtensionArgValueContext eav => ValueEntries(
+                ResolveType(doc, doc.TextOf(eav.Extension.TypeNameSpan)), doc.TextOf(eav.Argument.NameSpan)),
             _ => [],
-        }; 
+        };
+        return new XamlCompletionResult(entries, EditSpanOf(doc, ctx, line, column));
+    }
+
+    // The source range a completion at this position replaces — the token under
+    // the caret, selected from the spans the classifier already parsed onto the
+    // context. A property of the position, shared by every entry. Zero-length at
+    // the caret for a pure insertion (content slot, extension interior, or a value
+    // slot with no value node yet). The value slots return the CONTENT span, not
+    // the whole quoted region, so accepting an entry leaves the quotes intact.
+    private static TextSpan EditSpanOf(XamlDocument doc, XamlPositionContext ctx, Int32 line, Int32 column) => ctx switch
+    {
+        TagNameContext t => t.Element?.OpenNameSpan ?? Caret(doc, line, column),
+        ChildTagNameContext c => c.Element?.OpenNameSpan ?? Caret(doc, line, column),
+        AttributeNameContext a => a.Attribute.NameSpan,
+        AttributeValueContext v => v.Value?.ContentSpan ?? Caret(doc, line, column),
+        ExtensionTypeNameContext e => e.Extension.TypeNameSpan,
+        ExtensionArgNameContext n => n.Argument.NameSpan,
+        ExtensionPositionalArgContext p => p.Argument.Span,
+        ExtensionArgValueContext av => av.Value?.Span ?? Caret(doc, line, column),
+        _ => Caret(doc, line, column),
+    };
+
+    private static TextSpan Caret(XamlDocument doc, Int32 line, Int32 column)
+    {
+        var offset = doc.OffsetAt(line, column);
+        return new TextSpan(offset, 0, line, column, line, column);
     }
 
     // Point lookup: resolve one element to its bound type — the inverse of
@@ -189,4 +216,27 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
     // Binding's properties), resolved through the extension's TypeNameSpan.
     private IReadOnlyList<XamlCompletionEntry> ExtensionPropertyEntries(XamlDocument doc, XamlExtension ext)
         => PropertyEntries(ResolveType(doc, doc.TextOf(ext.TypeNameSpan)));
+
+    private static readonly String[] _boolValues = ["True", "False"];
+
+    // Values offered in a value slot (`<Button Visibility="|"`, `{Binding
+    // Mode=|}`): the enum members of the named property, or True/False when it
+    // is a Boolean. Both slots — attribute value and named-extension-arg value —
+    // share this, differing only in how owner and property name are resolved.
+    // Nullable enums / bools are already unwrapped at index time, so a
+    // Boolean? / SomeEnum? property lands here exactly like its non-null form.
+    // Unknown owner / property, or a property that is neither enum nor bool
+    // (string, number, type-converter values not yet wired) offers nothing.
+    private static IReadOnlyList<XamlCompletionEntry> ValueEntries(FullXamlType? owner, String propertyName)
+    {
+        var prop = owner?.Type.Properties.FirstOrDefault(p => p.Name == propertyName);
+        if (prop == null)
+            return [];
+
+        var values = prop.EnumValues ?? (prop.Type == "Boolean" ? _boolValues : null);
+        if (values == null)
+            return [];
+
+        return [.. values.Select(v => new XamlCompletionEntry(v, XamlCompletionKind.EnumValue, null))];
+    }
 }

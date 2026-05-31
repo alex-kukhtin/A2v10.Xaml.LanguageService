@@ -55,7 +55,7 @@ public class XamlContextProviderTests
             "<Page xmlns=\"clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml\">\n<B";
         var doc = XamlParser.Parse(src);
 
-        var entries = ctx.Complete(doc, 1, 2);
+        var entries = ctx.Complete(doc, 1, 2).Entries;
 
         Assert.NotEmpty(entries);
         Assert.All(entries, e => Assert.Equal(XamlCompletionKind.Tag, e.Kind));
@@ -80,7 +80,7 @@ public class XamlContextProviderTests
             """;
         var doc = XamlParser.Parse(src);
 
-        var entries = ctx.Complete(doc, 2, 1);
+        var entries = ctx.Complete(doc, 2, 1).Entries;
 
         Assert.NotEmpty(entries);
         Assert.Equal(13, entries.Count);
@@ -139,7 +139,7 @@ public class XamlContextProviderTests
             "<Table xmlns=\"clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml\">\n<";
         var doc = XamlParser.Parse(src);
 
-        var entries = ctx.Complete(doc, 1, 1);
+        var entries = ctx.Complete(doc, 1, 1).Entries;
 
         Assert.Contains(entries, e => e.Label == "TableRow");
         Assert.DoesNotContain(entries, e => e.Label == "Page");
@@ -214,7 +214,7 @@ public class XamlContextProviderTests
             """;
         var doc = XamlParser.Parse(src);
 
-        var entries = ctx.Complete(doc, 2, 1);
+        var entries = ctx.Complete(doc, 2, 1).Entries;
 
         Assert.Contains(entries, e => e.Label == "TableRow");
         Assert.DoesNotContain(entries, e => e.Label == "Page");
@@ -240,7 +240,7 @@ public class XamlContextProviderTests
             """;
         var doc = XamlParser.Parse(src);
 
-        var entries = ctx.Complete(doc, 2, 1);
+        var entries = ctx.Complete(doc, 2, 1).Entries;
 
         Assert.Empty(entries);
     }
@@ -262,7 +262,7 @@ public class XamlContextProviderTests
             """;
         var doc = XamlParser.Parse(src);
 
-        var entries = ctx.Complete(doc, 1, 16);
+        var entries = ctx.Complete(doc, 1, 16).Entries;
 
         Assert.Equal(25, entries.Count);
     }
@@ -285,6 +285,82 @@ public class XamlContextProviderTests
         Assert.Contains("Command", names);  // declared on CommandControl
         Assert.Contains("Content", names);  // declared on ContentControl
         Assert.Contains("Width", names);    // declared up at UIElement/Control
+    }
+
+    [Fact]
+    public void Complete_in_attribute_value_offers_enum_members()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        // GridLines is a (scalar) enum property of Table — the value slot must
+        // offer its members as EnumValue entries. Column 11 sits between the two
+        // quotes of the empty GridLines="" value on line 1.
+        const string src =
+            """
+            <Table xmlns="clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml"
+            GridLines="" />
+            """;
+        var doc = XamlParser.Parse(src);
+
+        var result = ctx.Complete(doc, 1, 11);
+
+        Assert.NotEmpty(result.Entries);
+        Assert.All(result.Entries, e => Assert.Equal(XamlCompletionKind.EnumValue, e.Kind));
+
+        // The edit range is the empty content BETWEEN the quotes (col 11, length 0),
+        // not the quoted region — so accepting a value yields GridLines="None", the
+        // quotes intact. This is the deterministic, parser-driven replacement that
+        // replaces the editor's word-guess (which ate the quotes).
+        Assert.Equal(0, result.EditSpan.Length);
+        Assert.Equal(1, result.EditSpan.StartLine);
+        Assert.Equal(11, result.EditSpan.StartColumn);
+    }
+
+    [Fact]
+    public void Complete_in_attribute_value_of_string_property_offers_nothing()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        // Title is a String property — no enum, no bool: the value slot stays
+        // empty (string / type-converter values are not wired).
+        const string src =
+            """
+            <Page xmlns="clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml"
+            Title="" />
+            """;
+        var doc = XamlParser.Parse(src);
+
+        var entries = ctx.Complete(doc, 1, 7).Entries;
+
+        Assert.Empty(entries);
+    }
+
+    [Fact]
+    public void Tag_name_completion_edit_span_covers_the_partial_name()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        // `<Ta` being typed inside Page: the edit range must cover the whole
+        // partial name `Ta` (cols 1..3), so accepting `Table` replaces `Ta`
+        // rather than inserting after it. This is the same token-replacement path
+        // that makes a prefixed name (`my:Ta` -> `my:Table`) work, since ':' is a
+        // name char and lives inside OpenNameSpan.
+        const string src =
+            "<Page xmlns=\"clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml\">\n<Ta";
+        var doc = XamlParser.Parse(src);
+
+        var result = ctx.Complete(doc, 1, 3);
+
+        Assert.Contains(result.Entries, e => e.Label == "Table");
+        Assert.Equal(1, result.EditSpan.StartLine);
+        Assert.Equal(1, result.EditSpan.StartColumn);
+        Assert.Equal(2, result.EditSpan.Length); // "Ta"
     }
 
     private static string FixtureProjectDir([CallerFilePath] string? thisFile = null) =>

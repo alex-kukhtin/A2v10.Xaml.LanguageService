@@ -18,6 +18,10 @@ internal static class XamlTypingEditor
     {
         '>' => CloseTag(doc, line, column),
         '/' => SelfClose(doc, line, column),
+        '"' => ClosePair(doc, line, column, '"'),
+        '\'' => ClosePair(doc, line, column, '\''),
+        '`' => ClosePair(doc, line, column, '`'),
+        '{' => ClosePair(doc, line, column, '}'),
         _ => null,
     };
 
@@ -42,6 +46,18 @@ internal static class XamlTypingEditor
 
         var caret = new TextSpan(offset, 0, line, column, line, column);
         return new XamlTypingEdit(caret, $"</{name}>");
+    }
+
+    // Auto-closing pair: the user typed an opening character ('"', '\'', '`', '{');
+    // insert its closing counterpart at the caret. Empty Replace at the caret =>
+    // the caret stays to the LEFT, i.e. between the pair (`{|}`, `"|"`). This is
+    // dumb pair-completion, exactly like an editor's auto-closing-pairs: no context
+    // analysis, no guards — it fires anywhere, regardless of tag / value / text.
+    private static XamlTypingEdit ClosePair(XamlDocument doc, Int32 line, Int32 column, Char close)
+    {
+        var offset = doc.OffsetAt(line, column);
+        var caret = new TextSpan(offset, 0, line, column, line, column);
+        return new XamlTypingEdit(caret, close.ToString());
     }
 
     // '/' was just typed inside an open tag. Complete it to '/>' by replacing the
