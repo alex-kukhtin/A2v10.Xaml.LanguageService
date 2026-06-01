@@ -234,16 +234,28 @@ internal sealed class XamlAssembly
         if (TryGetSingleGenericArg(propType, out elementType))
             return true;
 
+        // The List<T> may sit several levels up the base-class chain, not on the
+        // property type directly (Cells : TableCellCollection : UIElementCollection
+        // : List<UIElementBase>). Walk up while each base stays a TypeDefinition in
+        // this file; the generic collection appears as a TypeSpecification base —
+        // decode it and take the single type argument. Stops at the first external
+        // base (a TypeReference / nil), which we cannot follow.
         if (!propType.Handle.IsNil && propType.Handle.Kind == HandleKind.TypeDefinition)
         {
-            var coll = reader.GetTypeDefinition((TypeDefinitionHandle)propType.Handle);
-            if (coll.BaseType.Kind == HandleKind.TypeSpecification)
+            var current = reader.GetTypeDefinition((TypeDefinitionHandle)propType.Handle);
+            while (true)
             {
-                var baseType = reader.GetTypeSpecification((TypeSpecificationHandle)coll.BaseType)
-                    .DecodeSignature(_sig, null);
-                if (TryGetSingleGenericArg(baseType, out elementType))
-                    return true;
-            } 
+                var baseHandle = current.BaseType;
+                if (baseHandle.Kind == HandleKind.TypeSpecification)
+                {
+                    var baseType = reader.GetTypeSpecification((TypeSpecificationHandle)baseHandle)
+                        .DecodeSignature(_sig, null);
+                    return TryGetSingleGenericArg(baseType, out elementType);
+                }
+                if (baseHandle.Kind != HandleKind.TypeDefinition)
+                    break; // external base (sibling assembly / System.Object) or nil
+                current = reader.GetTypeDefinition((TypeDefinitionHandle)baseHandle);
+            }
         }
         elementType = String.Empty;
         return false;
