@@ -106,6 +106,24 @@ public class XamlContextProviderTests
     }
 
     [Fact]
+    public void TableRow_content_property_resolves_element_type_to_TableCell()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+
+        var doc = XamlParser.Parse(PageXaml);
+        var ctx = new XamlContextProvider(resolver);
+
+        // Table's content property is a TableRowCollection : List<TableRow>. The
+        // resolver must dig through the collection's base chain to the leaf
+        // element type — so the only tag valid inside <Table> is TableRow.
+        var table = ctx.ReachableTypes(doc).FirstOrDefault(t => t.Type.Name == "TableRow");
+        Assert.NotNull(table);
+        Assert.Equal("Cells", table!.Type.ContentProperty);
+        Assert.Equal("TableCell", table.Type.ContentPropertyType);
+    }
+
+    [Fact]
     public void Table_admits_only_TableRow_children()
     {
         using var resolver = new AssemblyResolver();

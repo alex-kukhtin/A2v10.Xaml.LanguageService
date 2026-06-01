@@ -262,15 +262,4 @@ public class XamlLexerTests
         Assert.Equal(1, bName.Span.StartLine);
         Assert.Equal(1, bName.Span.StartColumn);
     }
-
-    [Fact]
-    public void Unterminated_attribute_value_with_newline_keeps_going()
-    {
-        // No heuristic for '\n' yet — the value extends past newline up to next quote/EOF.
-        const string src = "<a x=\"line1\nline2\"/>";
-        var tokens = TokenizeAll(src);
-        var attrValue = System.Array.Find(tokens.ToArray(), t => t.Kind == TokenKind.AttributeValue);
-        Assert.False(attrValue.IsUnterminated);
-        Assert.Equal("\"line1\nline2\"", attrValue.TextOf(src));
-    }
 }

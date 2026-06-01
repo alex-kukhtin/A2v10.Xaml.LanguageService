@@ -175,15 +175,6 @@ public class ContextAtTests
     }
 
     [Fact]
-    public void Less_than_inside_attribute_value_is_still_AttributeValue()
-    {
-        // The '<' inside the string body must not trigger TagName.
-        const string src = "<a Width=\"some<text\"/>";
-        var doc = Parse(src);
-        Assert.IsType<AttributeValueContext>(At(doc, 19)); // inside "some<text", right after 't'
-    }
-
-    [Fact]
     public void Between_children_is_ElementContent()
     {
         //                  0         1

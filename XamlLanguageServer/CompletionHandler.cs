@@ -69,7 +69,7 @@ internal class CompletionHandler(
                 Label = e.Label,
                 Kind = MapKind(e.Kind),
                 Detail = e.Detail,
-                TextEdit = new TextEdit { Range = range, NewText = e.Label },
+                TextEdit = new TextEdit { Range = range, NewText = e.Label + result.InsertSuffix },
             })
             .ToArray();
         return Task.FromResult(new CompletionList(items));

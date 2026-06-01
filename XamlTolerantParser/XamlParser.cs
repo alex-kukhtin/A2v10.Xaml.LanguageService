@@ -8,8 +8,8 @@ public sealed class XamlParser
     readonly string _source;
     readonly XamlLexer _lex;
     readonly Stack<XamlElement> _open = new();
-    readonly List<XamlNode> _roots = new();
-    readonly List<XamlDiagnostic> _diagnostics = new();
+    readonly List<XamlNode> _roots = [];
+    readonly List<XamlDiagnostic> _diagnostics = [];
 
     XamlParser(string source)
     {
@@ -22,7 +22,7 @@ public sealed class XamlParser
 
     XamlDocument ParseDocument()
     {
-        Token eofTok = default;
+        Token eofTok;
         while (true)
         {
             var tok = _lex.NextToken();

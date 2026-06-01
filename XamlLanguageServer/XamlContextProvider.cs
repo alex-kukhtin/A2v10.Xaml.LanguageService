@@ -74,7 +74,15 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
         // The handler stamps it onto each item's TextEdit so the editor never
         // guesses the range itself (which ate the quotes in `Disabled="|"` and
         // duplicated the token in `{Bind Dat|}`).
-        return new XamlCompletionResult(entries, doc.IdentifierSpanAt(line, column));
+        //
+        // When the attribute value has no closing quote yet (the `Background="|`
+        // race state — see IsUnterminated), append the matching quote so the
+        // committed value stays balanced regardless of what VS does with its
+        // own applicable span.
+        var suffix = ctx is AttributeValueContext { Value: { IsUnterminated: true } v }
+            ? v.Quote.ToString()
+            : "";
+        return new XamlCompletionResult(entries, doc.IdentifierSpanAt(line, column), suffix);
     }
 
     // Point lookup: resolve one element to its bound type — the inverse of

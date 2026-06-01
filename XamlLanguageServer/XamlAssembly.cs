@@ -243,7 +243,7 @@ internal sealed class XamlAssembly
                     .DecodeSignature(_sig, null);
                 if (TryGetSingleGenericArg(baseType, out elementType))
                     return true;
-            }
+            } 
         }
         elementType = String.Empty;
         return false;

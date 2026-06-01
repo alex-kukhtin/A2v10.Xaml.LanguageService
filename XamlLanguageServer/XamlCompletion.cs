@@ -26,4 +26,11 @@ internal sealed record XamlCompletionEntry(String Label, XamlCompletionKind Kind
 // property of the position. The handler stamps EditSpan onto every item's
 // TextEdit so the editor never computes the range from its own word heuristic
 // (which eats the quotes in `Disabled="|"` and splits prefixes on ':').
-internal sealed record XamlCompletionResult(IReadOnlyList<XamlCompletionEntry> Entries, TextSpan EditSpan);
+//
+// InsertSuffix is appended verbatim to every item's NewText. It is the closing
+// quote for an UNTERMINATED attribute value (`Background="|` — no right quote in
+// the buffer): committing then yields a balanced `Background="White"` even when
+// the `"`-trigger session races onTypeFormatting and VS overwrites/eats its own
+// applicable span. Empty for terminated values (the quote is already there).
+internal sealed record XamlCompletionResult(
+    IReadOnlyList<XamlCompletionEntry> Entries, TextSpan EditSpan, String InsertSuffix = "");

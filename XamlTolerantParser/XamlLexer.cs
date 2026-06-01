@@ -20,7 +20,7 @@ public sealed class XamlLexer
     // Offsets of the first character of each line. _lineStarts[0] == 0 always.
     // Pushed during NextChar() on every '\n' consumed. Used by XamlDocument.OffsetAt
     // to convert (line, column) → offset without scanning the whole source.
-    readonly List<int> _lineStarts = new() { 0 };
+    readonly List<int> _lineStarts = [0];
 
     int _pos;
     int _line;
@@ -42,7 +42,7 @@ public sealed class XamlLexer
 
     // Snapshot of line-start offsets collected during lexing. The parser
     // hands this off to XamlDocument after Parse completes.
-    public int[] GetLineStarts() => _lineStarts.ToArray();
+    public int[] GetLineStarts() => [.. _lineStarts];
 
     public Token NextToken()
     {
@@ -288,10 +288,11 @@ public sealed class XamlLexer
         return new Token(TokenKind.Unknown, SpanFrom(start, sLine, sCol));
     }
 
-    // Slot for future heuristics. Right now: matching quote only.
-    bool IsStringTerminator(char ch, char openingQuote)
+    static Boolean IsStringTerminator(Char ch, Char openingQuote)
     {
-        return ch == openingQuote;
+
+        // newline is available here! (Markup Extensions)
+        return ch == openingQuote || ch == '<';
     }
 
     Token Eof()
