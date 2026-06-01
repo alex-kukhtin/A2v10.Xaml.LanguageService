@@ -89,9 +89,24 @@ public sealed class XamlLangServer
                  .AddSingleton(_assemblyResolver)
                  .AddSingleton<XamlContextProvider>();
             })
+            .OnInitialize((server, request, ct) =>
+            {
+                // VS 2026 advertises semanticTokens.dynamicRegistration = true but does
+                // NOT actually honour a dynamic (client/registerCapability) registration
+                // of the semantic-tokens provider — so the SemanticTokensHandler is never
+                // invoked. Clearing the client flag forces OmniSharp to declare
+                // semanticTokensProvider STATICALLY in the initialize response, which VS
+                // does honour. Completion / onTypeFormatting are unaffected (VS honours
+                // their dynamic registration). Probed against the working reference server.
+                var semanticTokens = request.Capabilities?.TextDocument?.SemanticTokens;
+                if (semanticTokens is { IsSupported: true, Value: { } cap })
+                    cap.DynamicRegistration = false;
+                return Task.CompletedTask;
+            })
             .WithHandler<TextDocumentSyncHandler>()
             .WithHandler<CompletionHandler>()
-            .WithHandler<OnTypeFormattingHandler>());
+            .WithHandler<OnTypeFormattingHandler>()
+            .WithHandler<SemanticTokensHandler>());
 
         await server.WaitForExit;
         _assemblyResolver.Dispose();

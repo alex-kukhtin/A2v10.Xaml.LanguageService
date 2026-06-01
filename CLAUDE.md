@@ -18,31 +18,45 @@ Goal: WPF-level IntelliSense — completion, diagnostics, hover, go-to-definitio
 
 ---
 
-## Two-layer architecture (proven end-to-end)
+## Architecture — single in-process LSP server (proven end-to-end)
 
-### Layer 1 — Syntax coloring: TextMate grammar
-- Declarative `.plist` grammar, auto-loaded by VS from `Starterkit\Extensions\` — no registration needed.
-- Copied from VS built-in XAML grammar. Changed: `fileTypes` → `vxaml`, `scopeName` → `text.vxaml` (must be unique), `uuid`.
-- Internal patterns/scopes unchanged — reuse XML grammar and XAML theme.
-- Maps to generic VS classifications: `markup node`, `markup attribute`, `markup attribute value`, `operator`, `string`, `comment`.
-- **Color palette: intentionally not customized.** The color chain is: scope (grammar) → `vs.tmTheme` → VS classification → Fonts & Colors. Editing `vs.tmTheme` is a VS installation file shared across all TextMate languages — bad delivery story. Users can remap colors in Tools → Options → Fonts and Colors.
+Everything — colouring, completion, on-type edits, diagnostics — is served by **one
+in-process OmniSharp LSP server**. There is no second (TextMate) layer; the editor talks
+LSP only.
 
-### Layer 2 — Intelligence: LSP server (OmniSharp)
+### Hosting — LSP server (OmniSharp)
 - Hosted **in-process** inside the extension. Transport: in-memory duplex channel (`Nerdbank.Streams.FullDuplexStream`).
 - Framework: `OmniSharp.Extensions.LanguageServer`.
 - Why in-process: in VS Extensibility (out-of-process model), `AppContext.BaseDirectory` points to the VS ServiceHub host — impossible to locate a sibling exe. In-process also enables F5 debugging of the server.
 - `StartAsync` must be called **fire-and-forget** — `LanguageServer.From` waits for `initialize` from VS, which only arrives after the pipe is returned. Awaiting it causes a deadlock.
 - **VS 2026 client capabilities are recorded** in a comment block above `XamlLangServer` (probed once by dumping `ClientCapabilities` at `initialize`). Facts that shape feature work: completion `SnippetSupport` / `CommitCharactersSupport` / `ContextSupport` / `InsertReplaceSupport` are all **false** (⇒ no trigger character in the request — dispatch off `ContextAt`; plain single-range `TextEdit`s only), hover is **plaintext-only**, push diagnostics are span+message only, and VS exposes the proprietary `_vs_onAutoInsert` and `LinkedEditingRange`. Re-probe if VS changes; see [memory: VS 2026 client capabilities](/.claude/memory/project_vs2026_client_capabilities.md).
 
+### Syntax colouring — LSP semantic tokens (`SemanticTokensHandler`)
+Colouring is **LSP semantic tokens**, not TextMate. (TextMate was tried first and
+abandoned — see "Rejected approaches".) `SemanticTokensHandler : SemanticTokensHandlerBase`:
+- **Static registration, not dynamic.** VS 2026 advertises `semanticTokens.dynamicRegistration = true` but does **not** honour a dynamic (`client/registerCapability`) registration of the semantic-tokens provider — so the handler is never invoked. `XamlLangServer.OnInitialize` clears the client's `SemanticTokens.DynamicRegistration` flag, forcing OmniSharp to declare `semanticTokensProvider` **statically** in the `initialize` response, which VS does honour. (Completion / onTypeFormatting are unaffected — VS honours *their* dynamic registration.) This was the one missing piece; without it colouring silently does nothing.
+- **Full only** — `Full.Delta = false`, `Range = false`. vxaml files are small and the transport is the in-process duplex stream, so a full token list per change is cheap (and adds **no** extra parse — see below).
+- **Legend echo.** The registration legend is the client's *own* advertised `TokenTypes` / `TokenModifiers` (guard the null — OmniSharp also calls `CreateRegistrationOptions` with no capability when folding into static server capabilities). Echoing means we can only ever name a type the client understands.
+- **Source is the cached `XamlDocument` tree** (`DocumentStore`), walked by `XamlDocument.Visit(Action<XamlNode>)` — so a semantic-tokens request is a pure tree walk, no reparse. `Visit` descends into **all** structural branches, not just `Children` (attributes, values, extensions, args each live on their owning node).
+- **Pure mapping + collect-then-sort.** `SemanticTokensHandler.Tokens(doc)` (unit-testable, no LSP builder) maps each colourable span to a `SemanticTokenType`, then **sorts by start position** before pushing — the builder delta-encodes and requires ascending order, but document order does not give it (an element's `CloseNameSpan` sits after its children yet `Visit` emits it in the element's pre-children visit). Multi-line spans (comment, CDATA, wrapped value) are split one-token-per-line (`PushSpan`) because the protocol cannot encode a token crossing a line.
+- **Palette: three colours**, chosen to echo standard XML (eyeballed live; VS themes collapse the ~23 standard token types into a handful of distinct colours, and the type→colour mapping is the *theme's* job — a user remaps in Tools → Options → Fonts and Colors):
+  - `String` — element tag names and markup-extension type names
+  - `Type` — attribute names, extension argument names, positional arguments
+  - `Keyword` — attribute values, extension argument values, CDATA
+  - `Comment` — comments
+  A positional argument's bare value and a named argument's value are both `XamlExtensionStringValue` but coloured differently, so they are coloured **via their parent argument node**, not in a standalone case. A nested extension is coloured by its own `XamlExtension` case on descent, never flattened into one value token.
+- **Tests assert STRUCTURE, not the literal type** (`SemanticTokensTests`): the three role colours are *discovered* from minimal samples, then everything is compared against them (which entities share a colour, positional-vs-named distinction, nested-not-flattened, three roles distinct). So the palette can be retuned with **zero** test edits as long as the structure holds. (Lesson: the first cut hardcoded `String`/`Type`/`Keyword` and churned on every colour tweak — pin the invariant, not the cosmetic choice.)
+- **Scope (decided):** colour only spans the parse tree exposes directly — names, values, comments, CDATA. Punctuation (`< > / = " { } ,`) and the xmlns prefix of a qualified name (`my:Button`) are **not** separately coloured (no dedicated span; a qualified name is coloured whole, prefix included).
+
 ---
 
 ## Rejected approaches (do not revisit without strong reason)
 
-- **Semantic tokens as TextMate replacement** — pull model breaks coloring on malformed input (i.e. almost every keystroke); valid only as an *additional* layer over TextMate.
+- **TextMate grammar for syntax colouring** — was the original Layer 1 (a `.plist` grammar copied from VS's built-in XAML, `scopeName` → `text.vxaml`, reusing the XML grammar + XAML theme). It *worked* when the grammar was dropped into the VS install folder by hand, but the new VS Extensibility (out-of-process) VSIX **cannot deliver a TextMate grammar** — there is no asset mechanism, and a hand-placed grammar is overwritten on every VS update. After a long fight with delivery, **abandoned in favour of LSP semantic tokens** (see Architecture). The earlier worry that "semantic tokens break colouring on malformed input (every keystroke)" did **not** materialise: the tolerant parser always yields a tree, so `Tokens` always returns a sensible set. The grammar project, `.plist`, pkgdef registration and the leftover `language-configuration.json` have all been removed.
 - **`ITextViewTaggerProvider` / `ClassificationTag`** — classic MEF API, unavailable in the new VS Extensibility model without a hybrid VSIX.
 - **Inheriting `.vxaml` from XML document type** — `DocumentTypeConfiguration.BaseDocumentType` is singular; setting it to XML breaks LSP.
 
-**Root cause of the three above:** the new VS Extensibility model is isolated from the classic in-process editor infrastructure. TextMate grammar is the bypass.
+**Root cause of the last two:** the new VS Extensibility model is isolated from the classic in-process editor infrastructure. The LSP server (semantic tokens, completion, diagnostics, on-type edits) is the bypass — everything goes through LSP.
 
 - **Incremental parsing / `TextDocumentSyncKind.Incremental`** — vxaml documents are 100-200 lines typically, 1000 lines exceptional. A full reparse of a 50 KB file by the hand-written lexer (zero allocations, all spans are structs over the same source) takes ~100 µs–1 ms. Per-keystroke that is ≤10 ms/sec of CPU on the worst file we'll ever see — well below the noise floor on a budget dominated by assembly reflection, JSON, and VS rendering. Going incremental costs Roslyn-tier infrastructure (red-green tree or equivalent) to make position-offset updates after a splice cheap; the implementation is ~2000 lines of subtle code for a win that won't be measurable. `TextDocumentSyncKind.Incremental` separately would save nothing: the transport is the in-process `Nerdbank.Streams.FullDuplexStream` (memory copy, no network), and applying the delta still allocates a fresh full-length string. The two are independent — and neither is justified at our sizes.
 
@@ -125,6 +139,7 @@ What `XamlDocument` exposes:
 - `OffsetAt(int line, int column)` — linear scan, used by source-scanning code (e.g. `IdentifierSpanAt`).
 - `TextOf(TextSpan)` — substring via offsets.
 - `IdentifierSpanAt(int line, int column)` — the run of name chars around the caret (back- + forward-walk over the source), the token a completion replaces. A pure text fact, independent of the parse tree, so it is immune to the half-open-span exclusive-end quirk. See "Type / context provision" → completion edit range.
+- `Visit(Action<XamlNode>)` — pre-order walk of the whole tree in document order. Descends into **all** structural branches, not just `Children` — attributes (`element.Attributes`), values (`attribute.Value`), markup extensions (`value.Extension`), arguments (`extension.Arguments`) and argument values each live on their owning node. A `Children`-only walk would miss every attribute, value and extension. Drives semantic-tokens colouring (`SemanticTokensHandler.Tokens`); independently tested in `VisitTests`.
 
 Span composition helpers on `TextSpan`:
 - `FromTo(from, to)` — merge from `from.Start*` to `to.End*`.
@@ -292,7 +307,14 @@ These attributes are authored on the dialect classes/properties in `A2v10.Xaml.d
 
 ## Open issues
 
-- **TextMate grammar delivery in production.** Currently the grammar lives in the VS installation folder and will be overwritten on VS update. The new extensibility model cannot carry TextMate grammars. Needs a companion classic VSIX or installer. Deferred.
-- **`XamlLanguageServerTests` (17 tests).** `XamlContextProviderTests` (real fixture: reads `XamlTolerantParserTests/@assemblies/A2v10.Xaml.dll` through the production `AssemblyResolver` / `MetadataReader`, no fakes) covers `ReachableTypes`, the tag-name / child-tag `Complete` cases, the content model (`Table → TableRow` typed collection; `SheetRow → ISheetCell` interface element type, incl. a child inheriting the interface through a base class), inherited-property collection (`Button` offers `Command`/`Content`/`Width` from up the chain), extension-property completion, the **value slots** (`GridLines=""` → enum members, `Title=""` String → empty), and the **edit range** (`EditSpan` covers the value content between quotes / the partial tag name / the extension arg token — the regression guards for the quote-eating and `{Bind Dat|}` duplication). Still thin on hover / diagnostics (not built).
+- **`XamlLanguageServerTests`.** `XamlContextProviderTests` (real fixture: reads `XamlTolerantParserTests/@assemblies/A2v10.Xaml.dll` through the production `AssemblyResolver` / `MetadataReader`, no fakes) covers `ReachableTypes`, the tag-name / child-tag `Complete` cases, the content model (`Table → TableRow` typed collection; `SheetRow → ISheetCell` interface element type, incl. a child inheriting the interface through a base class), inherited-property collection (`Button` offers `Command`/`Content`/`Width` from up the chain), extension-property completion, the **value slots** (`GridLines=""` → enum members, `Title=""` String → empty), and the **edit range** (`EditSpan` covers the value content between quotes / the partial tag name / the extension arg token — the regression guards for the quote-eating and `{Bind Dat|}` duplication). `SemanticTokensTests` covers the colouring mapping structurally (palette-agnostic — see Architecture). Still thin on hover / diagnostics (not built).
 - Debounce / cancellation for push diagnostics.
 - Potential version conflict between transitive dependencies of OmniSharp ↔ VS Extensibility SDK. Has not triggered yet — keep in mind.
+- **Auto-popping the value list right after the auto-inserted closing quote (`Wrap="|"`).** Goal: when the user types `"` after `Wrap=`, the enum-value list should appear *immediately*, with no Ctrl+Space. **Status: blocked on a client-side quote-eating bug; needs a decision before coding.**
+  - **What was tried:** added `"` to `CompletionHandler` `TriggerCharacters` (alongside `<`). The list *does* pop. But **commit (Enter) behaves differently by how the session opened**: opened by Ctrl+Space → fine; opened automatically by the `"` trigger → **VS eats the closing quote** (`Wrap="None` instead of `Wrap="None"`).
+  - **Root cause (proven, not theorised — see [memory: probe, don't theorize] / [memory: root cause before patching]).** A deterministic two-buffer test (temporary, since deleted) fed `Complete` the two possible buffer states at the completion request, caret at `C11`:
+    - `GridLines=""` (pair already inserted) → `ContextAt = AttributeValueContext`, 4 entries, `EditSpan` len=0 @C11.
+    - `GridLines="` (pair not yet inserted) → `ContextAt = OutsideContext`, 0 entries.
+    Since the list *does* show in live VS, the buffer at request time is already `GridLines=""` — i.e. **onTypeFormatting's pair-insert always runs before the completion request; no race.** So in BOTH Ctrl+Space and `"`-trigger cases the server sees an identical buffer + identical position, and — because `ContextSupport=false` (VS sends no `CompletionContext`, so the server cannot tell what triggered the session) — returns a **byte-identical response** (`EditSpan` len=0 @C11, quotes intact). The differing Enter behaviour is therefore **entirely client-side**: when the session was opened by the `"` trigger char, VS computes its own *applicable span* from the trigger position and overwrites by it on commit, **ignoring our zero-length `TextEdit.Range`** — eating the closing quote. Ctrl+Space leaves the applicable span empty, so our edit applies verbatim.
+  - **Candidate fix to try next (live-VS experiment):** set `CompletionList.ItemDefaults.editRange` explicitly. VS 2026 *honors* `ItemDefaults` (`commitCharacters`, `editRange`, `insertTextFormat` — see the capability snapshot in `XamlLangServer`), so an explicit editRange may override the applicable-span heuristic. Other avenues are dead ends: LSP gives the server no way to open the popup itself (so the trigger char is the only mechanism), and `_vs_onAutoInsert` is VS-proprietary (rejected — we want VSCode too).
+  - **Decision pending:** whether to pursue `ItemDefaults.editRange`, or drop auto-pop and keep Ctrl+Space only. The `"` in `TriggerCharacters` should NOT be committed until this is resolved (it ships the quote-eating regression).

@@ -95,8 +95,8 @@ internal class CompletionHandler(
         ClientCapabilities clientCapabilities) => new()
         {
             DocumentSelector = TextDocumentSelector.ForPattern("**/*.vxaml"),
-            TriggerCharacters = new Container<String>(["<"]),
-            AllCommitCharacters = new Container<String>(["=", "/", ">", " ", "}"]),
+            TriggerCharacters = new Container<String>(["<", "\""]),
+            AllCommitCharacters = new Container<String>(["=", "/", ">", " "]),
             ResolveProvider = false,
         };
 }

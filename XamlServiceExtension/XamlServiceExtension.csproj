@@ -2,38 +2,21 @@
 	<PropertyGroup>
 		<TargetFramework>net8.0-windows8.0</TargetFramework>
 		<RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
-		<Version>10.1.3003</Version>
-		<AssemblyVersion>10.1.3003</AssemblyVersion>
+		<Version>10.1.3012</Version>
+		<AssemblyVersion>10.1.3012</AssemblyVersion>
 		<ImplicitUsings>disable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<NoWarn>$(NoWarn);VSEXTPREVIEW_LSP</NoWarn>
 	</PropertyGroup>
 
-	
-	<ItemGroup>
-		<Content Include="extension.pkgdef">
-			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-			<IncludeInVsix>true</IncludeInVsix>
-		</Content>
 
-		<Content Include="TextMateLaunch\language-configuration.json">
-			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
-			<IncludeInVsix>true</IncludeInVsix>
-		</Content>
-		<Content Include="TextMateLaunch\Syntaxes\vxaml.tmLanguage">
-			<CopyToOutputDirectory>Always</CopyToOutputDirectory>
-			<IncludeInVsix>true</IncludeInVsix>
-		</Content>
-	</ItemGroup>
-	
-	
 	<ItemGroup>
 		<PackageReference Include="Microsoft.VisualStudio.Extensibility.Sdk" Version="17.14.40608" PrivateAssets="all" />
 		<PackageReference Include="Microsoft.VisualStudio.Extensibility.Build" Version="17.14.40608" PrivateAssets="all" />
 	</ItemGroup>
 
 	<ItemGroup>
-	  <ProjectReference Include="..\XamlLanguageServer\XamlLanguageServer.csproj" />
+		<ProjectReference Include="..\XamlLanguageServer\XamlLanguageServer.csproj" />
 	</ItemGroup>
 
 </Project>

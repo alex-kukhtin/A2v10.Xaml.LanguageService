@@ -52,6 +52,56 @@ public sealed class XamlDocument
         return i >= 0 ? Roots[i].FindNodeAt(line, column) : null;
     }
 
+    // Visits every node in the tree in document order, invoking `action` on each.
+    //
+    // Crucially this descends into ALL structural branches, not just Children:
+    // attributes (element.Attributes), values (attribute.Value), markup extensions
+    // (value.Extension), extension arguments (extension.Arguments) and argument
+    // values (argument.Value) each live on their owning node, NOT in Children.
+    // A consumer that only walked Children would miss every attribute, value and
+    // extension. Order within an element is attributes-then-children, matching the
+    // source layout (open tag before content), so spans come out roughly ascending.
+    //
+    // Pre-order (the node before its descendants). Drives semantic-tokens colouring
+    // and is independently testable.
+    public void Visit(Action<XamlNode> action)
+    {
+        foreach (var root in Roots)
+            Walk(root, action);
+    }
+
+    private static void Walk(XamlNode node, Action<XamlNode> action)
+    {
+        action(node);
+        switch (node)
+        {
+            case XamlElement e:
+                foreach (var attr in e.Attributes)
+                    Walk(attr, action);
+                foreach (var child in e.Children)
+                    Walk(child, action);
+                break;
+            case XamlAttribute a:
+                if (a.Value is { } av)
+                    Walk(av, action);
+                break;
+            case XamlValue v:
+                if (v.Extension is { } ext)
+                    Walk(ext, action);
+                break;
+            case XamlExtension x:
+                foreach (var arg in x.Arguments)
+                    Walk(arg, action);
+                break;
+            case XamlExtensionArgument arg:
+                if (arg.Value is { } argv)
+                    Walk(argv, action);
+                break;
+            // Leaves with no structural children: XamlText, XamlComment, XamlCData,
+            // XamlExtensionStringValue. Nothing to descend into.
+        }
+    }
+
     // Structural context for a cursor position — what is being edited
     // (tag name, attribute, value, ...) plus the relevant parse-tree nodes.
     // See XamlPositionContext for the full slot semantics.
