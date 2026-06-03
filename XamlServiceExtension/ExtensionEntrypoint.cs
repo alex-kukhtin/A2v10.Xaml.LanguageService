@@ -22,8 +22,7 @@ internal class ExtensionEntrypoint : Extension
             description: "IntelliSense and tooling for A2v10 XAML (.vxaml) — completion, diagnostics and hover powered by an in-process Language Server."
             )
         {
-            Icon = @"Resources\a2_logo_32.png",
-            PreviewImage = @"Resources\a2_logo_200.png",
+            Icon = @"Resources\a2_logo.ico",
             MoreInfo = "https://github.com/alex-kukhtin/A2v10.Xaml.LanguageService"
         },
     };

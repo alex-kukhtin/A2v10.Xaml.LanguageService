@@ -2,8 +2,8 @@
 	<PropertyGroup>
 		<TargetFramework>net8.0-windows</TargetFramework>
 		<RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
-		<Version>10.1.3014</Version>
-		<AssemblyVersion>10.1.3014</AssemblyVersion>
+		<Version>10.1.3015</Version>
+		<AssemblyVersion>10.1.3015</AssemblyVersion>
 		<AssemblyName>A2v10.Xaml.LanguageService</AssemblyName>
 		<ImplicitUsings>disable</ImplicitUsings>
 		<Nullable>enable</Nullable>
@@ -28,10 +28,7 @@
 	</ItemGroup>
 
 	<ItemGroup>
-		<Content Include="Resources\a2_logo_32.png">
-			<IncludeInVSIX>true</IncludeInVSIX>
-		</Content>
-		<Content Include="Resources\a2_logo_200.png">
+		<Content Include="Resources\a2_logo.ico">
 			<IncludeInVSIX>true</IncludeInVSIX>
 		</Content>
 	</ItemGroup>
