@@ -38,8 +38,9 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
     // (0-based line, 0-based UTF-16 column).
     //
     // Arm → offering:
-    //   TagName                          → root element tags
-    //   ChildTagName / ElementContent    → child element tags of the container
+    //   TagName                          → root element tags (+ comment / CDATA)
+    //   ChildTagName                     → child element tags (+ comment / CDATA)
+    //   ElementContent                   → child element tags of the container
     //   AttributeName                    → settable properties of the element
     //   ExtensionTypeName                → markup-extension types
     //   ExtensionInterior / ArgName /    → the extension type's properties
@@ -55,9 +56,9 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
         var ctx = doc.ContextAt(line, column);
         var entries = ctx switch
         {
-            TagNameContext => RootEntries(doc),
-            ChildTagNameContext ctn => ContentEntries(doc, ctn.Container),
-            ElementContentContext ecc => ContentEntries(doc, ecc.Element),
+            TagNameContext => WithSyntax(RootEntries(doc)),
+            ChildTagNameContext ctn => ContentEntries(doc, ctn.Container, offerSyntax: true),
+            ElementContentContext ecc => ContentEntries(doc, ecc.Element, offerSyntax: false),
             TagInteriorContext => [],
             AttributeNameContext anc => PropertyEntries(ResolveType(doc, anc.Element)),
             AttributeValueContext avc => ValueEntries(ResolveType(doc, avc.Element), doc.TextOf(avc.Attribute.NameSpan)),
@@ -113,6 +114,26 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
     private static XamlCompletionEntry CreateCompletionTag(FullXamlType xt)
         => new(xt.QualifiedName, XamlCompletionKind.Tag, "Xaml element");
 
+    // Syntactic constructs offered alongside element tags after `<`: an XML
+    // comment and a CDATA section. The label is what VS filters/displays (`!--`);
+    // InsertText carries the full body MINUS the leading `<` (already typed, and
+    // not part of the replaced identifier span). SnippetSupport is false (see
+    // XamlLangServer), so there is no caret placeholder — after commit the caret
+    // lands at the end of the inserted text.
+    private static readonly XamlCompletionEntry[] _syntaxEntries =
+    [
+        new("!--", XamlCompletionKind.Snippet, "Comment", "!--  -->"),
+        new("![CDATA[", XamlCompletionKind.Snippet, "CDATA section", "![CDATA[]]>"),
+    ];
+
+    // Element tags plus the syntactic constructs (comment, CDATA), for a tag-name
+    // slot where `<` has been typed: the root slot and the normal child slot.
+    // Callers gate it (ElementContent and property elements pass through their own
+    // un-wrapped path) so the snippets land only where a leading `<` is in the
+    // buffer and free markup is actually valid.
+    private static IReadOnlyList<XamlCompletionEntry> WithSyntax(IReadOnlyList<XamlCompletionEntry> tags)
+        => [.. tags, .. _syntaxEntries];
+
     // Tags valid as a document root — types deriving from RootContainer.
     // Label is prefix-qualified (`my:Page`) for a non-default binding. We
     // enumerate the full candidate set rather than point-look-up the partial
@@ -132,13 +153,20 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
             .Select(CreateCompletionTag)];
     }
 
-    private IReadOnlyList<XamlCompletionEntry> ContentEntries(XamlDocument doc, XamlElement container)
+    // offerSyntax appends the comment / CDATA snippets — true only for the child
+    // TAG slot (`<` already typed). The bare ElementContent slot (no `<` in the
+    // buffer) passes false: its tag bodies carry no leading `<`, and a comment
+    // body must, so the two cannot share an InsertText. Property elements never
+    // get the snippets either (handled by the early return below).
+    private IReadOnlyList<XamlCompletionEntry> ContentEntries(
+        XamlDocument doc, XamlElement container, Boolean offerSyntax)
     {
         var name = doc.TextOf(container.OpenNameSpan);
 
         // Property element <Owner.Property> — its children are the items of that
         // property's collection. Split on the first dot; the owner part may
-        // itself be prefix-qualified (my:Table.Header).
+        // itself be prefix-qualified (my:Table.Header). No comment / CDATA here:
+        // a property element's content is its property value, not free markup.
         var dot = name.IndexOf('.');
         if (dot >= 0)
             return PropertyElementEntries(doc, name[..dot], name[(dot + 1)..]);
@@ -162,9 +190,10 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
                 && (containerType == null || containerType.Type.IsVisibleIn(t));
         }
 
-        return [.. ReachableTypes(doc)
+        var tags = ReachableTypes(doc)
             .Where(IsVisible)
-            .Select(CreateCompletionTag)];
+            .Select(CreateCompletionTag);
+        return offerSyntax ? WithSyntax([.. tags]) : [.. tags];
     }
 
     // Children inside a property element <Owner.Property>: valid only when

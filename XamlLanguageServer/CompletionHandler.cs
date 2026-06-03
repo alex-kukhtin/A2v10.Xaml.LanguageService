@@ -58,6 +58,17 @@ internal class CompletionHandler(
         if (doc == null)
             return Task.FromResult(new CompletionList());
 
+        // VS re-requests completion on Backspace and reports the JUST-DELETED
+        // character in Context.TriggerCharacter (despite advertising
+        // ContextSupport=false — see XamlLangServer). When that deleted char is
+        // whitespace (space / tab / newline), the caret landed between tokens by
+        // deletion, not by intent, so an auto-popped list is pure noise — drop it.
+        // A null / empty trigger (Ctrl+Space, our '<' / '"' triggers, or backspace
+        // over a real name char) falls through to normal completion.
+        var trigger = request.Context?.TriggerCharacter;
+        if (!String.IsNullOrEmpty(trigger) && String.IsNullOrWhiteSpace(trigger))
+            return Task.FromResult(new CompletionList());
+
         var result = _provider.Complete(doc, request.Position.Line, request.Position.Character);
         // One edit range for the whole response: the server owns the replaced
         // token (from the position context) so the editor never guesses it. Plain
@@ -69,7 +80,7 @@ internal class CompletionHandler(
                 Label = e.Label,
                 Kind = MapKind(e.Kind),
                 Detail = e.Detail,
-                TextEdit = new TextEdit { Range = range, NewText = e.Label + result.InsertSuffix },
+                TextEdit = new TextEdit { Range = range, NewText = (e.InsertText ?? e.Label) + result.InsertSuffix },
             })
             .ToArray();
         return Task.FromResult(new CompletionList(items));
@@ -83,13 +94,17 @@ internal class CompletionHandler(
         XamlCompletionKind.Tag => CompletionItemKind.Class,
         XamlCompletionKind.Attribute => CompletionItemKind.Property,
         XamlCompletionKind.EnumValue => CompletionItemKind.EnumMember,
+        XamlCompletionKind.Snippet => CompletionItemKind.Snippet,
         _ => CompletionItemKind.Text,
     };
 
     // VS 2026 advertises SnippetSupport / CommitCharactersSupport / ContextSupport /
     // InsertReplaceSupport / PreselectSupport all = false (full capability snapshot in
-    // XamlLangServer). Consequences here: no trigger char in the request (dispatch off
-    // ContextAt only), no per-item commit chars, plain single-range TextEdits only.
+    // XamlLangServer). Consequences here: no per-item commit chars, plain single-range
+    // TextEdits only. NOTE: despite ContextSupport=false, VS DOES populate
+    // request.Context (observed live) — its TriggerCharacter is used above to drop
+    // Backspace-over-whitespace re-triggers. Entry SELECTION still dispatches off
+    // ContextAt, not the trigger char.
     public CompletionRegistrationOptions GetRegistrationOptions(
         CompletionCapability capability,
         ClientCapabilities clientCapabilities) => new()

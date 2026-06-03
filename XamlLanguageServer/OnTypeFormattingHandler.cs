@@ -45,7 +45,7 @@ internal class OnTypeFormattingHandler(DocumentStore _store) : IDocumentOnTypeFo
         {
             DocumentSelector = TextDocumentSelector.ForPattern("**/*.vxaml"),
             FirstTriggerCharacter = ">",
-            MoreTriggerCharacter = new Container<string>("/", "\"", "'", "`", "{"),
+            MoreTriggerCharacter = new Container<string>("/", "\"", "'", "`", "{", "\n"),
         };
 
     private static Range ToRange(TextSpan span) =>

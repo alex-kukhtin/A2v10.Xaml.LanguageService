@@ -19,8 +19,9 @@ namespace XamlLanguageServer;
 // familiar standard-XML palette:
 //   String  (red)   — element tag names and markup-extension type names
 //   Type    (teal)  — attribute names, extension argument names, positional arguments
-//   Keyword (blue)  — attribute values, extension argument values, CDATA
-// plus Comment (green) for comments. A user who wants a different palette remaps these
+//   Keyword (blue)  — attribute values, extension argument values
+// plus Comment (green) for comments AND CDATA (both read as inert text). A user who wants
+// a different palette remaps these
 // classifications in Tools -> Options -> Fonts and Colors (we pick semantically sensible
 // types, the theme owns the colour).
 //
@@ -114,7 +115,8 @@ internal class SemanticTokensHandler(DocumentStore _store) : SemanticTokensHandl
                     tokens.Add(new ColorToken(c.Span, SemanticTokenType.Comment));
                     break;
                 case XamlCData cd:
-                    tokens.Add(new ColorToken(cd.Span, SemanticTokenType.Keyword));
+                    // CDATA shares the comment colour — it reads as inert text, like a comment.
+                    tokens.Add(new ColorToken(cd.Span, SemanticTokenType.Comment));
                     break;
                 case XamlExtension x:
                     tokens.Add(new ColorToken(x.TypeNameSpan, SemanticTokenType.String));

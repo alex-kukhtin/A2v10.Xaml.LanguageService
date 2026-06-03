@@ -259,6 +259,74 @@ public class EditAtTests
         Assert.Equal("\"", edit!.NewText);
     }
 
+    // ---- '\n' mirrors the previous line's indent -------------------------
+    // Enter arrives at column 0 (VS does no indenting itself). The edit captures
+    // the just-typed line break and re-emits it followed by the previous line's
+    // leading whitespace, so the range END is the caret => caret lands after the
+    // indent.
+
+    [Fact]
+    public void Indent_mirrors_previous_line_spaces()
+    {
+        //                  0123456789
+        const string src = "    <a/>\n"; // 4-space indent, then Enter
+        var doc = Parse(src);
+        var edit = doc.EditAt(1, 0, '\n');
+        Assert.NotNull(edit);
+        Assert.Equal("\n    ", edit!.NewText); // line break + mirrored 4 spaces
+        // Replace captures the '\n' (index 8), range END is the caret at (1,0).
+        Assert.Equal(8, edit.Replace.Start);
+        Assert.Equal(1, edit.Replace.Length);
+        Assert.Equal(0, edit.Replace.StartLine);
+        Assert.Equal(8, edit.Replace.StartColumn);
+        Assert.Equal(1, edit.Replace.EndLine);
+        Assert.Equal(0, edit.Replace.EndColumn);
+    }
+
+    [Fact]
+    public void Indent_mirrors_previous_line_tabs_verbatim()
+    {
+        // Tabs are copied as-is (file style preserved, no FormattingOptions).
+        const string src = "\t\t<a/>\n";
+        var doc = Parse(src);
+        var edit = doc.EditAt(1, 0, '\n');
+        Assert.NotNull(edit);
+        Assert.Equal("\n\t\t", edit!.NewText);
+    }
+
+    [Fact]
+    public void Indent_no_previous_indent_is_noop()
+    {
+        // Previous line starts at column 0 -> nothing to mirror -> no edit.
+        const string src = "<a/>\n";
+        var doc = Parse(src);
+        Assert.Null(doc.EditAt(1, 0, '\n'));
+    }
+
+    [Fact]
+    public void Indent_preserves_crlf_line_break()
+    {
+        // CRLF file: the break is re-emitted as "\r\n", not collapsed to "\n".
+        const string src = "  <a/>\r\n";
+        var doc = Parse(src);
+        var edit = doc.EditAt(1, 0, '\n');
+        Assert.NotNull(edit);
+        Assert.Equal("\r\n  ", edit!.NewText);
+        Assert.Equal(1, edit.Replace.EndLine);
+        Assert.Equal(0, edit.Replace.EndColumn);
+    }
+
+    [Fact]
+    public void Indent_mirrors_indent_of_a_nested_line()
+    {
+        // Indent is taken from the immediately preceding line, whatever its depth.
+        const string src = "<Page>\n        <Button/>\n";
+        var doc = Parse(src);
+        var edit = doc.EditAt(2, 0, '\n');
+        Assert.NotNull(edit);
+        Assert.Equal("\n        ", edit!.NewText); // 8 spaces
+    }
+
     // ---- multi-line & misc ----------------------------------------------
 
     [Fact]

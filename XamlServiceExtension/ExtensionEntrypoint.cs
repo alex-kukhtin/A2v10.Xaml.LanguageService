@@ -23,8 +23,8 @@ internal class ExtensionEntrypoint : Extension
             )
         {
             Icon = @"Resources\a2_logo.ico",
-            MoreInfo = "https://github.com/alex-kukhtin/A2v10.Xaml.LanguageService"
-        },
+            MoreInfo = "https://github.com/alex-kukhtin/A2v10.Xaml.LanguageService",
+        }
     };
 
     /// <inheritdoc />

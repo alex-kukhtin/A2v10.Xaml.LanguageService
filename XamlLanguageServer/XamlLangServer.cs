@@ -25,9 +25,12 @@ namespace XamlLanguageServer;
 //   CommitCharactersSupport = false → no per-item commit characters. A shared set is
 //                                     still possible via registration AllCommitCharacters
 //                                     or CompletionList.ItemDefaults.commitCharacters.
-//   ContextSupport          = false → the request carries NO CompletionContext, so the
-//                                     trigger character is NOT available; dispatch purely
-//                                     off XamlDocument.ContextAt position classification.
+//   ContextSupport          = false → ADVERTISED false, but VS sends Context ANYWAY
+//                                     (observed live): request.Context.TriggerCharacter IS
+//                                     populated. On Backspace it is the JUST-DELETED text (a
+//                                     String, possibly many chars) — when all-whitespace,
+//                                     CompletionHandler drops the noise re-trigger. Entry
+//                                     SELECTION still dispatches off XamlDocument.ContextAt.
 //   InsertReplaceSupport    = false → no InsertReplaceEdit; use a plain single-range
 //                                     TextEdit for prefixed names (x:Name, my:Button).
 //   PreselectSupport        = false → cannot preselect an item.

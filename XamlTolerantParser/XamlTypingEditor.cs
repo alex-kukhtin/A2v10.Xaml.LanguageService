@@ -22,8 +22,49 @@ internal static class XamlTypingEditor
         '\'' => ClosePair(doc, line, column, '\''),
         '`' => ClosePair(doc, line, column, '`'),
         '{' => ClosePair(doc, line, column, '}'),
+        '\n' => Indent(doc, line, column),
         _ => null,
     };
+
+    // Enter was just pressed: the caret is at the start of the freshly created line
+    // (VS does NOT block-indent on its own — verified live, the request arrives with
+    // column 0). Mirror the previous line's leading whitespace, copied VERBATIM so we
+    // match the file's own tabs-vs-spaces style without consulting FormattingOptions.
+    // This is plain block indent (same level as the line above), not a smart +1 after
+    // an open tag — the parse tree is not consulted.
+    //
+    // Caret: an empty Replace at column 0 would leave the caret to the LEFT of the
+    // inserted indent (confirmed live). To land it AFTER the indent we need a NON-empty
+    // Replace whose range END is the caret — and the only thing to the left of a
+    // column-0 caret is the line break itself. So we Replace the break and re-emit it
+    // (preserving CRLF vs LF) followed by the indent; the range end is the caret, so VS
+    // moves the caret to the END of NewText, i.e. past the indent.
+    private static XamlTypingEdit? Indent(XamlDocument doc, Int32 line, Int32 column)
+    {
+        if (line == 0) return null; // no previous line to mirror
+        var src = doc.Source;
+
+        // Leading whitespace run of the previous line.
+        var prevStart = doc.OffsetAt(line - 1, 0);
+        var ws = prevStart;
+        while (ws < src.Length && (src[ws] == ' ' || src[ws] == '\t')) ws++;
+        var indent = src.Substring(prevStart, ws - prevStart);
+        if (indent.Length == 0) return null;
+
+        // Walk to the previous line's terminator, counting visible columns (\r is not
+        // a column, matching the lexer). `col` becomes the previous line's end column.
+        var i = prevStart;
+        var col = 0;
+        while (i < src.Length && src[i] != '\n') { if (src[i] != '\r') col++; i++; }
+        var crlf = i > prevStart && src[i - 1] == '\r';
+        var breakStart = crlf ? i - 1 : i; // include the '\r' so the whole break is replaced
+
+        // Replace [end of previous line .. caret] (the break, plus anything VS already
+        // put on the new line) with break + indent. Range end == caret => caret to end.
+        var caretOffset = doc.OffsetAt(line, column);
+        var replace = new TextSpan(breakStart, caretOffset - breakStart, line - 1, col, line, column);
+        return new XamlTypingEdit(replace, (crlf ? "\r\n" : "\n") + indent);
+    }
 
     // '>' was just typed. If it terminates the open tag of an element that is
     // neither self-closing nor already closed, insert the matching </name> at the

@@ -14,11 +14,16 @@ internal enum XamlCompletionKind
     Tag,
     Attribute,
     EnumValue,
+    Snippet,
 }
 
 // One completion suggestion. Already labelled and categorised by the provider;
-// the handler turns each entry into a CompletionItem 1:1.
-internal sealed record XamlCompletionEntry(String Label, XamlCompletionKind Kind, String? Detail);
+// the handler turns each entry into a CompletionItem 1:1. Label is both the
+// display text and (by default) the inserted text; InsertText overrides the
+// latter when they must differ — e.g. a comment shows `!--` but inserts the
+// whole `!--  -->` body.
+internal sealed record XamlCompletionEntry(
+    String Label, XamlCompletionKind Kind, String? Detail, String? InsertText = null);
 
 // The result of a completion request: the suggestions plus the single source
 // range they all replace — the token under the caret (zero-length for a pure

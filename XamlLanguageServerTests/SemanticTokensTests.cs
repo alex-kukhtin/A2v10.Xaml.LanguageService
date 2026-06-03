@@ -81,10 +81,12 @@ public class SemanticTokensTests
     }
 
     [Fact]
-    public void Cdata_shares_the_value_role()
+    public void Cdata_shares_the_comment_role()
     {
+        // CDATA is coloured like a comment — both read as inert text.
+        var commentType = Tokens("<a><!-- hi --></a>").Single(t => t.Text.Contains("hi")).Type;
         var cdataType = Tokens("<a><![CDATA[raw]]></a>").Single(t => t.Text.Contains("raw")).Type;
-        Assert.Equal(ValueRole, cdataType);
+        Assert.Equal(commentType, cdataType);
     }
 
     [Fact]

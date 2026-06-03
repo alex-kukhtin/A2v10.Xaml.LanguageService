@@ -58,7 +58,11 @@ public class XamlContextProviderTests
         var entries = ctx.Complete(doc, 1, 2).Entries;
 
         Assert.NotEmpty(entries);
-        Assert.All(entries, e => Assert.Equal(XamlCompletionKind.Tag, e.Kind));
+        // Type entries are all element tags (no enum / attribute leakage); the
+        // comment / CDATA snippets are the only non-Tag entries here.
+        Assert.All(
+            entries.Where(e => e.Kind != XamlCompletionKind.Snippet),
+            e => Assert.Equal(XamlCompletionKind.Tag, e.Kind));
         Assert.DoesNotContain(entries, e => e.Label == "Page");
     }
 
@@ -80,10 +84,13 @@ public class XamlContextProviderTests
             """;
         var doc = XamlParser.Parse(src);
 
+        // Caret is `<|/Text>` — right after `<`, a child tag slot. Text's content
+        // model offers 13 element tags; the comment / CDATA snippets ride along
+        // but are not part of the content-model count asserted here.
         var entries = ctx.Complete(doc, 2, 1).Entries;
 
         Assert.NotEmpty(entries);
-        Assert.Equal(13, entries.Count);
+        Assert.Equal(13, entries.Count(e => e.Kind == XamlCompletionKind.Tag));
     }
 
 
@@ -421,6 +428,72 @@ public class XamlContextProviderTests
 
         Assert.Equal(8, result.EditSpan.StartColumn);
         Assert.Equal(3, result.EditSpan.Length);
+    }
+
+    [Fact]
+    public void Root_tag_slot_offers_comment_and_cdata_snippets()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        // Caret right after the root `<` — a TagNameContext. Besides the root
+        // element tags, the comment and CDATA snippets are offered. Their body is
+        // inserted WITHOUT the leading `<` (already in the buffer).
+        var doc = XamlParser.Parse("<");
+
+        var entries = ctx.Complete(doc, 0, 1).Entries;
+
+        var comment = Assert.Single(entries, e => e.Label == "!--");
+        Assert.Equal(XamlCompletionKind.Snippet, comment.Kind);
+        Assert.Equal("!--  -->", comment.InsertText);
+
+        var cdata = Assert.Single(entries, e => e.Label == "![CDATA[");
+        Assert.Equal(XamlCompletionKind.Snippet, cdata.Kind);
+        Assert.Equal("![CDATA[]]>", cdata.InsertText);
+    }
+
+    [Fact]
+    public void Child_tag_slot_offers_comment_and_cdata_snippets()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        // `<` typed inside an open Page element — a ChildTagNameContext. The
+        // snippets ride along with the child element tags.
+        const string src =
+            "<Page xmlns=\"clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml\">\n<";
+        var doc = XamlParser.Parse(src);
+
+        var entries = ctx.Complete(doc, 1, 1).Entries;
+
+        Assert.Contains(entries, e => e.Label == "!--" && e.Kind == XamlCompletionKind.Snippet);
+        Assert.Contains(entries, e => e.Label == "![CDATA[" && e.Kind == XamlCompletionKind.Snippet);
+    }
+
+    [Fact]
+    public void Element_content_slot_without_a_typed_bracket_offers_no_snippets()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        // Caret on the empty line between the tags — col 0, no `<` typed: an
+        // ElementContentContext. A comment body would need a leading `<` that the
+        // tag bodies here do not carry, so the snippets stay out of this slot.
+        const string src =
+            """
+            <Text xmlns="clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml">
+
+            </Text>
+            """;
+        var doc = XamlParser.Parse(src);
+
+        var entries = ctx.Complete(doc, 1, 0).Entries;
+
+        Assert.NotEmpty(entries);
+        Assert.DoesNotContain(entries, e => e.Kind == XamlCompletionKind.Snippet);
     }
 
     private static string FixtureProjectDir([CallerFilePath] string? thisFile = null) =>
