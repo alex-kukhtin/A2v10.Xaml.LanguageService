@@ -282,6 +282,38 @@ These attributes are authored on the dialect classes/properties in `A2v10.Xaml.d
 
 ---
 
+## Multi-client hosting — `IClientProfile` (idea, not yet implemented)
+
+A second host is planned: a **standalone stdio Language Server for VSCode** alongside the VS 2026 VSIX. The transport boundary is already clean for this — `XamlLanguageServer` and `XamlTolerantParser` reference **nothing** VS-specific (no `Microsoft.VisualStudio.*`, no `Nerdbank.Streams`); the only VS mention in the server is a *word inside a doc comment*. `XamlLangServer.Start(Stream, Stream)` takes abstract streams, so a VSCode host just calls it with `Console.OpenStandardInput()/Output()` instead of a `FullDuplexStream` pair. All VS-transport code is confined to `XamlServiceExtension.XamlLanguageServerProvider.CreateServerConnectionAsync`. So the port adds a new thin host, and **does not touch** the two language projects.
+
+What *does* differ between clients is not transport but **handler calibration** — and the decided approach is to **not branch on raw `ClientCapabilities`** (too general; combinatorial 2ⁿ flag space ⇒ testing hell). Instead, introduce an **`IClientProfile`** abstraction with a small implementation per client (`VsProfile`, `VsCodeProfile`). The profile collapses the capability matrix into **2 named, intention-revealing decisions sets** that are tested as wholes: a handler depends on a *named decision* (`profile.AppendClosingQuoteOnUnterminatedValue`), never on the shape of the capability graph, so handler tests inject a tiny profile and profile correctness is a one-time data assertion. Linear, not combinatorial.
+
+- **Name:** `IClientProfile` (decided). Avoid `…Options` — collides with OmniSharp's own `LanguageServerOptions` (the `opts` in `LanguageServer.From`) and reads like config knobs rather than a behavioural profile of the target client.
+- **Selection is by HOST, not by an `initialize` probe.** The host is the only layer that legitimately knows its client: the VS extension injects `VsProfile`; the VSCode console-exe injects `VsCodeProfile` (hardcoded or `--client=vscode`). One `VsCodeProfile` covers the whole VSCode family (Cursor/VSCodium). Capabilities may still be dumped once as a log-time sanity probe (as the VS profile was originally snapped — see the comment block above `XamlLangServer`), but they stop being the dispatch mechanism. Wiring: one extra param `XamlLangServer.Start(stream, stream, IClientProfile)`, registered as a singleton in `WithServices`, read by handlers via DI and by `OnInitialize` (which then stops hardcoding the semantic-tokens flag clear).
+- **Interface vs record:** most decisions are pure data (bool/enum), so a `sealed record` with `static readonly Vs`/`VsCode` would suffice — but `HoverFormat` already foreshadows *behaviour* (`string FormatHover(...)` differs per client), and there are genuinely two implementations, so an interface is justified under the project's own DI convention.
+- **Discipline (matches [memory: typical over exhaustive](/.claude/memory/feedback_typical_over_exhaustive.md)):** a flag enters `IClientProfile` **only when a handler actually branches on it** — otherwise the profile distends into a full mirror of `ClientCapabilities` and the testing hell returns under a new name.
+
+The decisions that diverge today (all three are VSCode-port blockers — calibration, *not* transport):
+
+| Decision | VS 2026 | VSCode |
+|---|---|---|
+| `AppendClosingQuoteOnUnterminatedValue` (the quote-race `InsertSuffix` fix — see Open issues) | `true` | `false` *(verify live — VSCode has its own applicable-span + client-side auto-close)* |
+| `ServerSideAutoClosingPairs` (`"` `'` `` ` `` `{` via onTypeFormatting) | `true` | `false` — VSCode does this client-side via `language-configuration.json` (a server+client double-insert otherwise) |
+| `ForceStaticSemanticTokens` (clear `SemanticTokens.DynamicRegistration` in `OnInitialize`) | `true` | `false` — VSCode honours dynamic registration (forcing static is harmless but should be a profile decision, not a hardcode) |
+
+Future profile members (add when the feature lands, not before): `HoverFormat { Plaintext, Markdown }` for the planned `HoverService`; snippet (`$0` tab stops) and per-item commit-character richness (VSCode supports both, VS 2026 does not).
+
+**Other VSCode-port notes (not `IClientProfile`, but client-side):** auto-closing pairs, brackets and comment markers move into a `language-configuration.json` shipped by the VSCode extension; a TextMate grammar becomes *available again* there (it was abandoned only because VS Extensibility couldn't deliver it — see "Rejected approaches") as an optional instant-colour layer under semantic tokens, though semantic-tokens-only also works. .NET runtime distribution (framework-dependent vs self-contained per-platform vsix) is a packaging decision for the VSCode host, independent of the server.
+
+### Local dev loop under VSCode (no marketplace, no `vsce`)
+
+To run the server under VSCode *on a dev machine* — and specifically to **probe the real VSCode `ClientCapabilities`** before any calibration — needs only F5, not publishing. Prereqs: .NET SDK, VSCode, **Node.js + npm** (the client extension pulls `vscode-languageclient` via `npm install`). Two small new artifacts on top of the existing server:
+
+1. **stdio host** — a tiny console project referencing `XamlLanguageServer`, body essentially `await new XamlLangServer().Start(Console.OpenStandardInput(), Console.OpenStandardOutput())`. Three differences from the VS host: (i) **`await` to exit** — not fire-and-forget; in a separate process there is no deadlock reason and the process must outlive the server; (ii) **never write to `stdout`** except LSP — any `Console.WriteLine` poisons the protocol, logs go to `stderr`/file; (iii) in dev it is launched as `dotnet …\bin\Debug\net8.0\<host>.dll`, straight from `bin`, no publish.
+2. **Minimal VSCode extension** — a folder with `package.json` (`engines.vscode`, `main`, `contributes.languages` = id `vxaml`/`.vxaml`, `activationEvents: ["onLanguage:vxaml"]`, dependency `vscode-languageclient`), `extension.js` (a `LanguageClient` whose `ServerOptions` spawn `dotnet <host>.dll` over stdio, `documentSelector` = `vxaml`), and `.vscode/launch.json` (Run Extension). Then `npm install`.
+
+Run: open the extension folder, **F5** → second window (**Extension Development Host**) → open a `.vxaml` → extension activates → client spawns the `dotnet` server → `initialize` fires. **First action once this works: dump `request.Capabilities` in `OnInitialize`** (same throwaway probe that produced the VS 2026 block above `XamlLangServer`) → that yields the **real** VSCode profile. Until that dump exists, the VSCode capability values are **unknown and must not be assumed** — "VSCode is the reference LSP client / those flags are true" is a guess, not data (the project's quote-race saga already shows a "proven" client-behaviour theory being wrong — see [memory: probe, don't theorize](/.claude/memory/feedback_probe_dont_theorize.md), [memory: root cause before patching](/.claude/memory/feedback_root_cause_before_patching.md)). The `IClientProfile` calibration is gated on this probe.
+
 ## DI & services
 
 - Extension-level services (logging etc.) are registered in `ExtensionEntrypoint.InitializeServices(IServiceCollection)`.
