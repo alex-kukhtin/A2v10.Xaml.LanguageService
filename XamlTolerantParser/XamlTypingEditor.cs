@@ -109,14 +109,20 @@ internal static class XamlTypingEditor
         var offset = doc.OffsetAt(line, column);
         if (offset == 0 || doc.Source[offset - 1] != '/') return null;
 
+        // Must be the self-close slash of an OPEN TAG. Two structural guards:
+        // a '/' in a value / text resolves to XamlValue / XamlText, not the
+        // element; and the '/' of a hand-typed close tag (`<Grid></|`) resolves
+        // to the element but sits in its CONTENT, outside OpenTagSpan — turning
+        // it into '/>' would produce `<Grid></>`. A null OpenTagSpan means the
+        // open tag never reached '>' — the typed '/' is part of it.
+        if (doc.FindNodeAt(line, column - 1) is not XamlElement e) return null;
+        if (e.OpenTagSpan is { } open && !open.Contains(line, column - 1)) return null;
+
         // Already '/>': the user typed '/' just before an existing '>'. The element
         // is now self-closing; if a matching close tag stands LITERALLY right after
         // the '>' it is now redundant — collapse it. Otherwise nothing to do.
         if (offset < doc.Source.Length && doc.Source[offset] == '>')
-            return CollapseRedundantCloseTag(doc, line, column, offset);
-
-        // Must be the self-close slash of an open tag, not a '/' in a value/text.
-        if (doc.FindNodeAt(line, column - 1) is not XamlElement) return null;
+            return CollapseRedundantCloseTag(doc, e, line, column, offset);
 
         var slash = new TextSpan(offset - 1, 1, line, column - 1, line, column);
         return new XamlTypingEdit(slash, "/>");
@@ -131,9 +137,8 @@ internal static class XamlTypingEditor
     // (`<StackPanel><Grid/></StackPanel>`) must NOT eat the parent's `</StackPanel>`.
     // The deletion is entirely to the right of the caret, so the caret stays put.
     private static XamlTypingEdit? CollapseRedundantCloseTag(
-        XamlDocument doc, Int32 line, Int32 column, Int32 gtOffset)
+        XamlDocument doc, XamlElement e, Int32 line, Int32 column, Int32 gtOffset)
     {
-        if (doc.FindNodeAt(line, column - 1) is not XamlElement e) return null;
         var name = doc.TextOf(e.OpenNameSpan);
         if (name.Length == 0) return null;
 

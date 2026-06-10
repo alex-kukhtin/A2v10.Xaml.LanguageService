@@ -6,6 +6,11 @@ public sealed class XamlElement : XamlNode
 {
     public TextSpan OpenNameSpan { get; }
     public TextSpan? CloseNameSpan { get; internal set; }
+    // Full extent of the open tag (`<name …>` / `<name …/>`), both angle
+    // brackets included. Null when the tag never reached its '>' (EOF or
+    // recovery cut): the open tag then runs to the element's end, so every
+    // position inside the element is still tag interior.
+    public TextSpan? OpenTagSpan { get; internal set; }
     public bool IsSelfClosing { get; internal set; }
 
     public IList<XamlAttribute> Attributes { get; } = [];

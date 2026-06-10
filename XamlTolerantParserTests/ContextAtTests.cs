@@ -193,6 +193,66 @@ public class ContextAtTests
         Assert.IsType<ElementContentContext>(At(doc, 3));
     }
 
+    // --- Content of an UNCLOSED element (the mid-typing buffer state) ---
+
+    [Fact]
+    public void Content_whitespace_of_unclosed_element_is_ElementContent()
+    {
+        // The open tag IS closed; the cursor sits in content whitespace.
+        const string src = "<Grid>\n  \n";
+        var doc = Parse(src);
+        var ctx = Assert.IsType<ElementContentContext>(doc.ContextAt(1, 1));
+        Assert.Same(doc.Roots[0], ctx.Element);
+    }
+
+    [Fact]
+    public void Content_whitespace_of_unclosed_element_at_exact_eof_is_ElementContent()
+    {
+        // No trailing newline: the cursor sits at the exclusive end of the
+        // unclosed element's span. The element owns its trailing edge — there
+        // is nothing after it for the boundary position to belong to (same
+        // rule as an unclosed markup extension).
+        const string src = "<Grid>\n  ";
+        var doc = Parse(src);
+        var ctx = Assert.IsType<ElementContentContext>(doc.ContextAt(1, 2));
+        Assert.Same(doc.Roots[0], ctx.Element);
+    }
+
+    [Fact]
+    public void Right_after_open_tag_of_unclosed_child_at_eof_is_ElementContent()
+    {
+        //                  0123456
+        const string src = "<a><b>";
+        var doc = Parse(src);
+        var ctx = Assert.IsType<ElementContentContext>(At(doc, 6));
+        Assert.Equal("b", doc.TextOf(ctx.Element.OpenNameSpan));
+    }
+
+    [Fact]
+    public void Unterminated_open_tag_trailing_edge_at_eof_stays_Outside()
+    {
+        // No '>' yet — the whole element is still its open tag, so the
+        // trailing edge is the (quiet) attribute zone, not content. The
+        // trailing-edge retry must NOT pull it in.
+        //                  01234567
+        const string src = "<Button ";
+        var doc = Parse(src);
+        Assert.IsType<OutsideContext>(At(doc, 8));
+    }
+
+    [Fact]
+    public void At_a_childs_opening_angle_is_TagInterior_of_child()
+    {
+        // Cursor exactly on '<' of a child: the position is inside the child's
+        // OpenTagSpan. Deliberately quiet (TagInterior offers nothing) — the
+        // old forward-scan classified it as the CHILD's content, offering the
+        // child's children one position before the child even starts.
+        const string src = "<a><b/></a>";
+        var doc = Parse(src);
+        var ctx = Assert.IsType<TagInteriorContext>(At(doc, 3));
+        Assert.Equal("b", doc.TextOf(ctx.Element.OpenNameSpan));
+    }
+
     [Fact]
     public void Inside_text_content_is_Text()
     {

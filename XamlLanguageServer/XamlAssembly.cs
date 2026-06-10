@@ -307,7 +307,11 @@ internal sealed class XamlAssembly
                 var setter = reader.GetMethodDefinition(accessors.Setter);
                 if ((setter.Attributes & MethodAttributes.Static) != 0)
                     continue;
-                if (!HasPublicAccessor(reader, accessors))
+                // Settable FROM XAML means the SETTER is public — a public
+                // getter with a private setter reads fine in C# but cannot be
+                // assigned by an attribute. The getter's visibility is
+                // irrelevant here.
+                if ((setter.Attributes & MethodAttributes.MemberAccessMask) != MethodAttributes.Public)
                     continue;
 
                 // Unwrap Nullable<T> (Boolean?, SomeEnum?) to its underlying T:
@@ -335,15 +339,6 @@ internal sealed class XamlAssembly
             current = reader.GetTypeDefinition((TypeDefinitionHandle)current.BaseType);
         }
         return [.. list];
-    }
-
-    private static Boolean HasPublicAccessor(MetadataReader reader, PropertyAccessors accessors)
-    {
-        if (!accessors.Getter.IsNil &&
-            (reader.GetMethodDefinition(accessors.Getter).Attributes & MethodAttributes.MemberAccessMask) == MethodAttributes.Public)
-            return true;
-        return !accessors.Setter.IsNil &&
-            (reader.GetMethodDefinition(accessors.Setter).Attributes & MethodAttributes.MemberAccessMask) == MethodAttributes.Public;
     }
 
     // Enum member names, but only when the enum is defined in THIS file (its base

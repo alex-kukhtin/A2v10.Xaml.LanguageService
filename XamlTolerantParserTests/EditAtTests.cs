@@ -98,6 +98,38 @@ public class EditAtTests
     }
 
     [Fact]
+    public void Slash_of_hand_typed_close_tag_is_noop()
+    {
+        // The user typed '<' then '/' writing "</Grid>" by hand. The '/' sits in
+        // the element's CONTENT (outside OpenTagSpan), not in its open tag —
+        // self-closing it would mangle the buffer into "<Grid></>".
+        //                  01234567
+        const string src = "<Grid></";
+        var doc = Parse(src);
+        Assert.Null(doc.EditAt(0, 8, '/'));
+    }
+
+    [Fact]
+    public void Slash_of_hand_typed_close_tag_after_content_is_noop()
+    {
+        //                  0          1
+        //                  01234567890
+        const string src = "<Grid>foo</";
+        var doc = Parse(src);
+        Assert.Null(doc.EditAt(0, 11, '/'));
+    }
+
+    [Fact]
+    public void Slash_of_hand_typed_close_tag_mid_document_is_noop()
+    {
+        // Same keystroke with content following the partial close tag.
+        //                  01234567
+        const string src = "<Grid></<Button/></Grid>";
+        var doc = Parse(src);
+        Assert.Null(doc.EditAt(0, 8, '/'));
+    }
+
+    [Fact]
     public void Slash_inside_attribute_value_is_noop()
     {
         //                  0123456789

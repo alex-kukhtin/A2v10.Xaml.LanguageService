@@ -19,7 +19,18 @@ internal static class XamlPositionClassifier
 {
     public static XamlPositionContext Classify(XamlDocument doc, Int32 line, Int32 column)
     {
-        var node = doc.FindNodeAt(line, column);
+        // Trailing-edge rule: an element whose close tag is missing OWNS its
+        // trailing edge — its half-open span ends at EOF and there is no next
+        // construct for the boundary position to belong to (the same rule
+        // XamlValue.FindNodeAt applies to an unclosed extension). Retry one
+        // column back and accept only such an element. The OpenTagSpan guard
+        // keeps an open tag that never reached '>' (`<Button |` at EOF) on
+        // today's quiet Outside path — its edge is the attribute zone, not
+        // content.
+        var node = doc.FindNodeAt(line, column)
+            ?? (column > 0 && doc.FindNodeAt(line, column - 1) is XamlElement
+                { IsSelfClosing: false, CloseNameSpan: null, OpenTagSpan: not null } open
+                ? open : null);
         var offset = doc.OffsetAt(line, column);
         var diagnostics = FilterDiagnostics(doc, line, column);
 
@@ -108,7 +119,7 @@ internal static class XamlPositionClassifier
             XamlText t => new TextContext(t.OwnerElement, t, diagnostics),
             // Attribute invariant (parser-guaranteed): Owner is non-null.
             XamlAttribute a => new AttributeNameContext(a.Owner!, a, diagnostics),
-            XamlElement e => ClassifyInElement(doc, e, offset, diagnostics),
+            XamlElement e => ClassifyInElement(e, line, column, diagnostics),
             _ => new OutsideContext(diagnostics),
         };
     }
@@ -121,44 +132,17 @@ internal static class XamlPositionClassifier
         return new AttributeValueContext(attr.Owner!, attr, v, diags);
     }
 
+    // Interior vs content is a span fact the parser already recorded: inside
+    // OpenTagSpan (`<name …>`) is the attribute area, past it is content. A
+    // null OpenTagSpan means the open tag never reached its '>' (EOF /
+    // recovery input) — the whole element is still the open tag, so the
+    // cursor stays interior (tolerant input).
     private static XamlPositionContext ClassifyInElement(
-        XamlDocument doc, XamlElement e, Int32 offset, IReadOnlyList<XamlDiagnostic> diags)
+        XamlElement e, Int32 line, Int32 column, IReadOnlyList<XamlDiagnostic> diags)
     {
-        return IsInsideOpenTag(doc.Source, e, offset)
-            ? new TagInteriorContext(e, diags)
-            : new ElementContentContext(e, diags);
-    }
-
-    // True when `offset` sits between the open tag's name end and its closing
-    // '>' or '/>'. Scans forward, skipping attribute spans (whose values may
-    // contain raw '<' / '>'). EOF means the open tag was never closed — treat
-    // the cursor as still inside (tolerant input).
-    private static Boolean IsInsideOpenTag(String src, XamlElement elem, Int32 offset)
-    {
-        var i = offset;
-        while (i < src.Length)
-        {
-            if (TrySkipAttribute(elem, ref i))
-                continue;
-            var c = src[i];
-            if (c == '>') return true;
-            if (c == '<') return false;
-            i++;
-        }
-        return true;
-    }
-
-    private static Boolean TrySkipAttribute(XamlElement elem, ref Int32 i)
-    {
-        foreach (var a in elem.Attributes)
-        {
-            if (a.Span.Start <= i && i < a.Span.End)
-            {
-                i = a.Span.End;
-                return true;
-            }
-        }
-        return false;
+        return e.OpenTagSpan is { } open && !open.Contains(line, column)
+            ? new ElementContentContext(e, diags)
+            : new TagInteriorContext(e, diags);
     }
 
     // Optimistically returns `cursorNode as XamlElement` when it satisfies

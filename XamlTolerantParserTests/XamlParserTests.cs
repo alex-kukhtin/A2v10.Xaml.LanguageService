@@ -287,4 +287,19 @@ public class XamlParserTests
         Assert.IsType<XamlCData>(doc.Roots[0]);
         Assert.Contains(doc.Diagnostics, d => d.Message.Contains("Unterminated CDATA"));
     }
+
+    [Fact]
+    public void Pathological_run_of_unclosed_tags_parses_with_constant_stack()
+    {
+        // 50k broken open tags in a row (think: a binary file opened as .vxaml).
+        // ParseStartTag handles the StartTagOpen recovery via an eliminated tail
+        // call (`goto restart`); if anyone reverts it to recursion, this test
+        // dies with a StackOverflow instead of passing.
+        const int n = 50_000;
+        var src = string.Concat(Enumerable.Repeat("<a ", n));
+        var doc = Parse(src);
+        // Every broken tag is recovered as a root-level sibling.
+        Assert.Equal(n, doc.Roots.Count);
+        Assert.Contains(doc.Diagnostics, d => d.Message.Contains("not closed"));
+    }
 }

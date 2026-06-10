@@ -91,6 +91,15 @@ public sealed class XamlParser
 
     void ParseStartTag(Token openTok)
     {
+    // Manual tail-call elimination. The StartTagOpen recovery case below used to
+    // recurse (`ParseStartTag(tok); return;`) — a pure tail call, but the JIT does
+    // not guarantee eliminating it, so a pathological run of `<a <a <a ...` (a
+    // binary file opened as .vxaml) could overflow the stack. The goto IS that
+    // tail call, spelled as a jump: `openTok = tok; goto restart;` re-enters the
+    // method body with the new token, byte-for-byte the same semantics, constant
+    // stack. Do not "clean this up" back into recursion or a while+flag — the
+    // label is the cheapest equivalent form.
+    restart:
         var name = _lex.NextToken();
         if (name.Kind != TokenKind.ElementName)
         {
@@ -116,12 +125,14 @@ public sealed class XamlParser
 
                 case TokenKind.TagClose:
                     elem.Span = TextSpan.FromTo(elem.Span, tok.Span);
+                    elem.OpenTagSpan = elem.Span;
                     _open.Push(elem);
                     return;
 
                 case TokenKind.SelfTagClose:
                     elem.IsSelfClosing = true;
                     elem.Span = TextSpan.FromTo(elem.Span, tok.Span);
+                    elem.OpenTagSpan = elem.Span;
                     return;
 
                 case TokenKind.EndOfFile:
@@ -132,11 +143,11 @@ public sealed class XamlParser
 
                 case TokenKind.StartTagOpen:
                     // The current tag never reached '>'. Close it as a sibling (no push to _open),
-                    // then let the parser process the new tag.
+                    // then process the new tag — the eliminated tail call (see `restart` above).
                     _diagnostics.Add(new XamlDiagnostic(openTok.Span, "Tag is not closed."));
                     elem.Span = TextSpan.FromToStart(elem.Span, tok.Span);
-                    ParseStartTag(tok);
-                    return;
+                    openTok = tok;
+                    goto restart;
 
                 case TokenKind.EndTagOpen:
                     // Same idea, but the next thing is somebody's close tag — let the document loop handle it.
