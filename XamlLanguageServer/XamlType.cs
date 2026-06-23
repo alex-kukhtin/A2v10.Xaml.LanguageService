@@ -29,7 +29,8 @@ internal sealed class XamlType(
     String? contentProperty,
     String? contentPropertyType,
     XamlProperty[] properties,
-    String[]? attachedProperties)
+    XamlProperty[] attachedProperties,
+    Boolean attachedTransparent)
 {
     private readonly XamlTypeRole _role = role;
     // Simple names of every base class (within and across the file boundary, as
@@ -41,6 +42,24 @@ internal sealed class XamlType(
     public String? ContentProperty { get; } = contentProperty;
     public String? ContentPropertyType { get; } = contentPropertyType;
     public XamlProperty[] Properties { get; } = properties;
+
+    // Attached properties this type declares for ITS children (Grid -> Row, Col),
+    // used dotted on a child: <Block Grid.Row="1"/>. Names come from the
+    // runtime-owned [AttachedProperties]; value types from the advisory
+    // [AttachedPropertyType] overlay (see XamlAssembly.BuildAttached). Carried as
+    // full XamlProperty so the dotted value slot reuses ValueEntries unchanged — a
+    // name without an overlay type is "Object" (name completion only). Never null:
+    // empty when the attribute is absent, so the ancestor walk iterates freely.
+    public XamlProperty[] AttachedProperties { get; } = attachedProperties;
+
+    // Whether an OUTER container's attached properties pass THROUGH this type to
+    // its descendants (Grid > <transparent wrapper> > Block lets Block see
+    // Grid.Row). Default false — attached reach direct children only, the WPF
+    // rule; the [AttachedTransparent] marker opens deeper propagation on the few
+    // containers that forward it. Default true would make the marker a permanent
+    // no-op, so false is the only meaningful polarity. Read by name, so it lights
+    // up automatically once the marker appears on real A2v10 types.
+    public Boolean IsAttachedTransparent { get; } = attachedTransparent;
 
     public Boolean IsRootElement => _role.HasFlag(XamlTypeRole.RootElement);
     public Boolean IsMarkupExtension => _role.HasFlag(XamlTypeRole.MarkupExtension);

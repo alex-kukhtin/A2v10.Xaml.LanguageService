@@ -60,14 +60,14 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
             ChildTagNameContext ctn => ContentEntries(doc, ctn.Container, offerSyntax: true),
             ElementContentContext ecc => ContentEntries(doc, ecc.Element, offerSyntax: false),
             TagInteriorContext => [],
-            AttributeNameContext anc => PropertyEntries(ResolveType(doc, anc.Element)),
-            AttributeValueContext avc => ValueEntries(ResolveType(doc, avc.Element), doc.TextOf(avc.Attribute.NameSpan)),
+            AttributeNameContext anc => [.. PropertyEntries(ResolveType(doc, anc.Element)), .. AttachedEntries(doc, anc.Element)],
+            AttributeValueContext avc => ValueEntries(AttributeValueProperty(doc, avc.Element, doc.TextOf(avc.Attribute.NameSpan))),
             ExtensionTypeNameContext => ExtensionTypeEntries(doc),
             ExtensionInteriorContext eic => ExtensionPropertyEntries(doc, eic.Extension),
             ExtensionArgNameContext ean => ExtensionPropertyEntries(doc, ean.Extension),
             ExtensionPositionalArgContext epc => ExtensionPropertyEntries(doc, epc.Extension),
             ExtensionArgValueContext eav => ValueEntries(
-                ResolveType(doc, doc.TextOf(eav.Extension.TypeNameSpan)), doc.TextOf(eav.Argument.NameSpan)),
+                PropertyByName(ResolveType(doc, doc.TextOf(eav.Extension.TypeNameSpan)), doc.TextOf(eav.Argument.NameSpan))),
             _ => [],
         };
         // The replaced range is the identifier run around the caret — one text
@@ -229,6 +229,35 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
             .Select(p => new XamlCompletionEntry(p.Name, XamlCompletionKind.Attribute, "Xaml Property"))];
     }
 
+    // Attached properties an element may carry, contributed by its ancestor
+    // containers (a child of <Grid> may set Grid.Row). Walk up the Parent chain:
+    // the direct container always contributes its own attached names; we keep
+    // climbing only THROUGH an attached-transparent ancestor (IsAttachedTransparent),
+    // so an outer container's attached reach a deeper descendant only when the
+    // levels between are transparent — default false means direct children only,
+    // the WPF rule. Labels are owner-qualified (`my:Grid.Row`); deduped by label
+    // because two same-type transparent ancestors would name the same attached.
+    private IReadOnlyList<XamlCompletionEntry> AttachedEntries(XamlDocument doc, XamlElement element)
+    {
+        var seen = new HashSet<String>(StringComparer.Ordinal);
+        var entries = new List<XamlCompletionEntry>();
+        for (var current = element.Parent as XamlElement; current != null; current = current.Parent as XamlElement)
+        {
+            var owner = ResolveType(doc, current);
+            if (owner == null)
+                break; // unknown ancestor: cannot read its attached or transparency
+            foreach (var attached in owner.Type.AttachedProperties)
+            {
+                var label = $"{owner.QualifiedName}.{attached.Name}";
+                if (seen.Add(label))
+                    entries.Add(new XamlCompletionEntry(label, XamlCompletionKind.Attribute, "Xaml Property"));
+            }
+            if (!owner.Type.IsAttachedTransparent)
+                break;
+        }
+        return entries;
+    }
+
     // Properties of the type named by a markup extension (`{Binding |}` →
     // Binding's properties), resolved through the extension's TypeNameSpan.
     private IReadOnlyList<XamlCompletionEntry> ExtensionPropertyEntries(XamlDocument doc, XamlExtension ext)
@@ -237,23 +266,38 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
     private static readonly String[] _boolValues = ["True", "False"];
 
     // Values offered in a value slot (`<Button Visibility="|"`, `{Binding
-    // Mode=|}`): the enum members of the named property, or True/False when it
-    // is a Boolean. Both slots — attribute value and named-extension-arg value —
-    // share this, differing only in how owner and property name are resolved.
-    // Nullable enums / bools are already unwrapped at index time, so a
-    // Boolean? / SomeEnum? property lands here exactly like its non-null form.
-    // Unknown owner / property, or a property that is neither enum nor bool
-    // (string, number, type-converter values not yet wired) offers nothing.
-    private static IReadOnlyList<XamlCompletionEntry> ValueEntries(FullXamlType? owner, String propertyName)
+    // Mode=|}`, `<Block Grid.VAlign="|"`): the enum members of the resolved
+    // property, or True/False when it is a Boolean. All slots share this, differing
+    // only in how the property is resolved (helpers below). Nullable enums / bools
+    // are already unwrapped at index time, so a Boolean? / SomeEnum? lands here
+    // exactly like its non-null form. A null property, or one that is neither enum
+    // nor bool (string, number, type-converter values not yet wired) offers nothing.
+    private static IReadOnlyList<XamlCompletionEntry> ValueEntries(XamlProperty? prop)
     {
-        var prop = owner?.Type.Properties.FirstOrDefault(p => p.Name == propertyName);
-        if (prop == null)
-            return [];
-
-        var values = prop.EnumValues ?? (prop.Type == "Boolean" ? _boolValues : null);
+        var values = prop?.EnumValues ?? (prop?.Type == "Boolean" ? _boolValues : null);
         if (values == null)
             return [];
 
         return [.. values.Select(v => new XamlCompletionEntry(v, XamlCompletionKind.EnumValue, null))];
+    }
+
+    private static XamlProperty? PropertyByName(FullXamlType? owner, String name)
+        => owner?.Type.Properties.FirstOrDefault(p => p.Name == name);
+
+    // The property behind an attribute-value slot. A dotted name is an attached
+    // property: the owner is the type named by the dotted prefix (`Grid` in
+    // `Grid.VAlign`, prefix-qualified `my:Grid` handled by ResolveType), and the
+    // property lives in that type's AttachedProperties — the same owner-from-name
+    // split the property-element path uses. A plain name is the element's own
+    // property.
+    private XamlProperty? AttributeValueProperty(XamlDocument doc, XamlElement element, String attrName)
+    {
+        var dot = attrName.IndexOf('.');
+        if (dot < 0)
+            return PropertyByName(ResolveType(doc, element), attrName);
+
+        var owner = ResolveType(doc, attrName[..dot]);
+        var propertyName = attrName[(dot + 1)..];
+        return owner?.Type.AttachedProperties.FirstOrDefault(p => p.Name == propertyName);
     }
 }

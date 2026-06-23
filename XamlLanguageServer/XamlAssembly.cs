@@ -39,6 +39,13 @@ internal sealed class XamlAssembly
 
     public XamlAssembly(MetadataReader reader)
     {
+        // Pre-pass: index every enum's members by simple name. Attached-property
+        // value types are named (by string) in [AttachedPropertyType] but their
+        // members live in the enum's own (real) metadata — and the enum may be
+        // defined AFTER a type that references it, so the index must be complete
+        // before any type is built. Cheap: non-enums are rejected at the base check.
+        var enumValues = BuildEnumIndex(reader);
+
         foreach (var handle in reader.TypeDefinitions)
         {
             var td = reader.GetTypeDefinition(handle);
@@ -51,7 +58,7 @@ internal sealed class XamlAssembly
             if (baseClassNames.Count > 0 && baseClassNames[0] == "Enum")
                 continue;
 
-            var type = BuildType(reader, td, name, baseClassNames, baseNames);
+            var type = BuildType(reader, td, name, baseClassNames, baseNames, enumValues);
 
             if (!_byNamespace.TryGetValue(ns, out var dict))
             {
@@ -87,12 +94,18 @@ internal sealed class XamlAssembly
         ns = reader.GetString(td.Namespace);
         if (ns.Length == 0)
             return false;
+        // [Browsable(false)] types are dropped from the index entirely — they are
+        // never offered, never resolved. Skipping at the source beats carrying a
+        // hide-flag through the model and re-filtering at every entry builder.
+        if (!ReadBoolAttribute(reader, td.GetCustomAttributes(), "Browsable", true))
+            return false;
         name = reader.GetString(td.Name);
         return true;
     }
 
     private static XamlType BuildType(MetadataReader reader, TypeDefinition td, String name,
-        List<String> baseClassNames, HashSet<String> baseNames)
+        List<String> baseClassNames, HashSet<String> baseNames,
+        Dictionary<String, String[]> enumValues)
     {
         XamlTypeRole role = XamlTypeRole.None;
         foreach (var bn in baseClassNames)
@@ -104,10 +117,79 @@ internal sealed class XamlAssembly
             ? null
             : ResolveContentElementType(reader, td, contentProperty);
 
-        var attachedProperites = ReadCustomAttribute(reader, td, "AttachedProperties");
+        var attached = BuildAttached(reader, td, enumValues);
+        var attachedTransparent = HasCustomAttribute(reader, td, "AttachedTransparent");
 
         return new XamlType(name, role, baseNames, contentProperty, contentPropertyType,
-            ReadSettableProperties(reader, td), attachedProperites?.Split(','));
+            ReadSettableProperties(reader, td), attached, attachedTransparent);
+    }
+
+    // The attached properties a type declares for its children. The NAMES are the
+    // runtime-owned [AttachedProperties("Col,Row,...")] list — authoritative and
+    // always present. The optional value TYPE comes from a separate, advisory
+    // [AttachedPropertyType("VAlign", "VerticalAlign")] overlay (sparse: only the
+    // ~10% that have completable values — enums and Boolean — are annotated). A
+    // name absent from the overlay gets type "Object" (no value completion). Enum
+    // members are filled from the pre-built index, keyed by the named type.
+    private static XamlProperty[] BuildAttached(MetadataReader reader, TypeDefinition td,
+        Dictionary<String, String[]> enumValues)
+    {
+        var names = ReadCustomAttribute(reader, td, "AttachedProperties");
+        if (names == null)
+            return [];
+
+        var types = ReadAttachedPropertyTypes(reader, td);
+        var list = new List<XamlProperty>();
+        foreach (var raw in names.Split(','))
+        {
+            var name = raw.Trim();
+            if (name.Length == 0)
+                continue;
+            var type = types.GetValueOrDefault(name) ?? "Object";
+            list.Add(new XamlProperty(name, type, null, enumValues.GetValueOrDefault(type)));
+        }
+        return [.. list];
+    }
+
+    // The advisory name -> value-type overlay from the repeatable
+    // [AttachedPropertyType(name, typeName)] marker. Read by simple name like the
+    // rest; the type is a plain string (no typeof — we resolve enums by simple name
+    // everywhere, so a namespace would only be thrown away).
+    private static Dictionary<String, String> ReadAttachedPropertyTypes(MetadataReader reader, TypeDefinition td)
+    {
+        var map = new Dictionary<String, String>(StringComparer.Ordinal);
+        foreach (var ah in td.GetCustomAttributes())
+        {
+            var ca = reader.GetCustomAttribute(ah);
+            if (AttributeTypeName(reader, ca) != "AttachedPropertyTypeAttribute")
+                continue;
+            var value = ca.DecodeValue(_sig);
+            if (value.FixedArguments.Length >= 2
+                && value.FixedArguments[0].Value is String n
+                && value.FixedArguments[1].Value is String t)
+                map[n] = t;
+        }
+        return map;
+    }
+
+    // Every enum's members, indexed by simple name. The whole-assembly pass the
+    // attached-type overlay needs: an enum referenced by name (not by a handle from
+    // a property signature) cannot go through the handle-based ReadEnumValues.
+    private static Dictionary<String, String[]> BuildEnumIndex(MetadataReader reader)
+    {
+        var map = new Dictionary<String, String[]>(StringComparer.Ordinal);
+        foreach (var handle in reader.TypeDefinitions)
+        {
+            var td = reader.GetTypeDefinition(handle);
+            if (td.BaseType.Kind != HandleKind.TypeReference)
+                continue;
+            if (reader.GetString(reader.GetTypeReference((TypeReferenceHandle)td.BaseType).Name) != "Enum")
+                continue;
+            var values = ReadEnumLiterals(reader, td);
+            if (values != null)
+                map[reader.GetString(td.Name)] = values;
+        }
+        return map;
     }
 
     // One walk up the base-class chain, producing both:
@@ -192,6 +274,17 @@ internal sealed class XamlAssembly
         }
     }
 
+    // Presence check for a parameterless marker attribute (e.g. [AttachedTransparent]).
+    // Matched by simple name like ReadCustomAttribute, so no reference to the
+    // attribute type is needed — it activates the day the marker appears on a type.
+    private static Boolean HasCustomAttribute(MetadataReader reader, TypeDefinition td, String attrName)
+    {
+        foreach (var ah in td.GetCustomAttributes())
+            if (AttributeTypeName(reader, reader.GetCustomAttribute(ah)) == $"{attrName}Attribute")
+                return true;
+        return false;
+    }
+
     private static String? ReadCustomAttribute(MetadataReader reader, TypeDefinition td, String attrName)
     {
         foreach (var ah in td.GetCustomAttributes())
@@ -204,6 +297,24 @@ internal sealed class XamlAssembly
                 return s;
         }
         return null;
+    }
+
+    // The bool ctor arg of an attribute (e.g. [Browsable(false)]) on a type's or a
+    // property's custom attributes, matched by simple name. Returns `dflt` when the
+    // attribute is absent or carries no bool first argument.
+    private static Boolean ReadBoolAttribute(MetadataReader reader,
+        CustomAttributeHandleCollection attrs, String attrName, Boolean dflt)
+    {
+        foreach (var ah in attrs)
+        {
+            var ca = reader.GetCustomAttribute(ah);
+            if (AttributeTypeName(reader, ca) != $"{attrName}Attribute")
+                continue;
+            var value = ca.DecodeValue(_sig);
+            if (value.FixedArguments.Length > 0 && value.FixedArguments[0].Value is Boolean b)
+                return b;
+        }
+        return dflt;
     }
 
     // The element type that a content property constrains children to. A typed
@@ -307,6 +418,11 @@ internal sealed class XamlAssembly
                 var setter = reader.GetMethodDefinition(accessors.Setter);
                 if ((setter.Attributes & MethodAttributes.Static) != 0)
                     continue;
+
+                var browsable = ReadBoolAttribute(reader, pd.GetCustomAttributes(), "Browsable", true);
+                if (!browsable)
+                    continue;
+
                 // Settable FROM XAML means the SETTER is public — a public
                 // getter with a private setter reads fine in C# but cannot be
                 // assigned by an attribute. The getter's visibility is
@@ -353,7 +469,13 @@ internal sealed class XamlAssembly
             return null;
         if (reader.GetString(reader.GetTypeReference((TypeReferenceHandle)def.BaseType).Name) != "Enum")
             return null;
+        return ReadEnumLiterals(reader, def);
+    }
 
+    // The literal static fields of an enum — its member names. The caller has
+    // already confirmed `def` is an enum.
+    private static String[]? ReadEnumLiterals(MetadataReader reader, TypeDefinition def)
+    {
         var names = new List<String>();
         foreach (var fh in def.GetFields())
         {

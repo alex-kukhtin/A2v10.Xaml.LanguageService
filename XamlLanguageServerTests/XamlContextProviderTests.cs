@@ -496,6 +496,69 @@ public class XamlContextProviderTests
         Assert.DoesNotContain(entries, e => e.Kind == XamlCompletionKind.Snippet);
     }
 
+    [Fact]
+    public void Grid_declares_its_attached_properties_none_transparent_by_default()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+
+        var doc = XamlParser.Parse(PageXaml);
+        var ctx = new XamlContextProvider(resolver);
+
+        // Grid carries [AttachedProperties("Col,Row,...")], read by name into
+        // AttachedProperties. The fixture has no [AttachedPropertyType] overlay yet,
+        // so every attached type is "Object" (name completion only, no values), and
+        // no type carries [AttachedTransparent], so IsAttachedTransparent is false
+        // everywhere — both defaults.
+        var grid = ctx.ReachableTypes(doc).First(t => t.Type.Name == "Grid").Type;
+        var names = grid.AttachedProperties.Select(p => p.Name).ToArray();
+        Assert.Contains("Row", names);
+        Assert.Contains("Col", names);
+        Assert.All(grid.AttachedProperties, p => Assert.Equal("Object", p.Type));
+        Assert.False(grid.IsAttachedTransparent);
+    }
+
+    [Fact]
+    public void Attached_properties_offered_on_a_direct_child_of_the_container()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        // Completing an attribute name on a Button that is a direct child of Grid:
+        // besides Button's own properties, the container's attached properties are
+        // offered owner-qualified (Grid.Row, Grid.Col).
+        const string src =
+            "<Grid xmlns=\"clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml\">\n<Button D";
+        var doc = XamlParser.Parse(src);
+
+        var entries = ctx.Complete(doc, 1, 9).Entries;
+
+        Assert.Contains(entries, e => e.Label == "Grid.Row" && e.Kind == XamlCompletionKind.Attribute);
+        Assert.Contains(entries, e => e.Label == "Grid.Col");
+    }
+
+    [Fact]
+    public void Attached_properties_stop_at_a_non_transparent_intermediate()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        // Text sits under Button under Grid. Button declares no attached properties
+        // and is not transparent (the default), so the ancestor walk stops at it —
+        // Grid's attached do NOT reach Text. This is the gate's stop branch: by
+        // default attached reach direct children only.
+        const string src =
+            "<Grid xmlns=\"clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml\">\n<Button>\n<Text X";
+        var doc = XamlParser.Parse(src);
+
+        var entries = ctx.Complete(doc, 2, 7).Entries;
+
+        Assert.DoesNotContain(entries, e => e.Label == "Grid.Row");
+        Assert.DoesNotContain(entries, e => e.Label == "Grid.Col");
+    }
+
     private static string FixtureProjectDir([CallerFilePath] string? thisFile = null) =>
         Path.GetFullPath(Path.Combine(Path.GetDirectoryName(thisFile!)!, "..", "XamlTolerantParserTests"));
 }
