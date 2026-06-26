@@ -32,10 +32,15 @@ internal sealed record XamlCompletionEntry(
 // TextEdit so the editor never computes the range from its own word heuristic
 // (which eats the quotes in `Disabled="|"` and splits prefixes on ':').
 //
-// InsertSuffix is appended verbatim to every item's NewText. It is the closing
-// quote for an UNTERMINATED attribute value (`Background="|` — no right quote in
-// the buffer): committing then yields a balanced `Background="White"` even when
-// the `"`-trigger session races onTypeFormatting and VS overwrites/eats its own
-// applicable span. Empty for terminated values (the quote is already there).
+// ValueQuote is the quote character of an attribute-value slot (`"` / `'`), or
+// null when the position is not a value slot. It is a pure structural fact — the
+// provider states "this slot is delimited by quote X", nothing about clients.
+// The handler decides whether to append a matching closing quote, keyed on the
+// trigger character: when the completion session was opened by TYPING the quote
+// (`"`-trigger), that session races onTypeFormatting's auto-pair and VS eats the
+// closing quote on commit, so the handler appends it back — yielding a balanced
+// `Background="White"`. A Ctrl+Space session (no trigger char) opens against the
+// already-settled `=""` buffer and is left untouched (appending there would
+// double the quote). See CLAUDE.md "Open issues" — the quote-race.
 internal sealed record XamlCompletionResult(
-    IReadOnlyList<XamlCompletionEntry> Entries, TextSpan EditSpan, String InsertSuffix = "");
+    IReadOnlyList<XamlCompletionEntry> Entries, TextSpan EditSpan, Char? ValueQuote = null);

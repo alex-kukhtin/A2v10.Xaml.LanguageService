@@ -2,8 +2,8 @@
 	<PropertyGroup>
 		<TargetFramework>net8.0-windows</TargetFramework>
 		<RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
-		<Version>10.1.3017</Version>
-		<AssemblyVersion>10.1.3017</AssemblyVersion>
+		<Version>10.1.3018</Version>
+		<AssemblyVersion>10.1.3018</AssemblyVersion>
 		<AssemblyName>A2v10.Xaml.LanguageService</AssemblyName>
 		<ImplicitUsings>disable</ImplicitUsings>
 		<Nullable>enable</Nullable>

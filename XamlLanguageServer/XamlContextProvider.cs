@@ -76,14 +76,15 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
         // guesses the range itself (which ate the quotes in `Disabled="|"` and
         // duplicated the token in `{Bind Dat|}`).
         //
-        // When the attribute value has no closing quote yet (the `Background="|`
-        // race state — see IsUnterminated), append the matching quote so the
-        // committed value stays balanced regardless of what VS does with its
-        // own applicable span.
-        var suffix = ctx is AttributeValueContext { Value: { IsUnterminated: true } v }
-            ? v.Quote.ToString()
-            : "";
-        return new XamlCompletionResult(entries, doc.IdentifierSpanAt(line, column), suffix);
+        // ValueQuote states the structural fact "this is a value slot delimited
+        // by quote X" — the handler turns it into the quote-race closing-quote
+        // append, keyed on the trigger character (see XamlCompletionResult). The
+        // quote is NOT taken from Value.IsUnterminated: in a mid-tag value the
+        // lexer pairs the just-typed quote with the NEXT attribute's quote, so
+        // IsUnterminated reads false even though the closing quote is missing —
+        // the quote char itself (Value.Quote) is the reliable structural fact.
+        var quote = ctx is AttributeValueContext { Value: { } v } ? v.Quote : (Char?)null;
+        return new XamlCompletionResult(entries, doc.IdentifierSpanAt(line, column), quote);
     }
 
     // Point lookup: resolve one element to its bound type — the inverse of
@@ -237,7 +238,7 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
     // levels between are transparent — default false means direct children only,
     // the WPF rule. Labels are owner-qualified (`my:Grid.Row`); deduped by label
     // because two same-type transparent ancestors would name the same attached.
-    private IReadOnlyList<XamlCompletionEntry> AttachedEntries(XamlDocument doc, XamlElement element)
+    private List<XamlCompletionEntry> AttachedEntries(XamlDocument doc, XamlElement element)
     {
         var seen = new HashSet<String>(StringComparer.Ordinal);
         var entries = new List<XamlCompletionEntry>();

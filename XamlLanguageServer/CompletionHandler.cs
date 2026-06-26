@@ -74,13 +74,23 @@ internal class CompletionHandler(
         // token (from the position context) so the editor never guesses it. Plain
         // single-range TextEdit — InsertReplaceSupport is false (see XamlLangServer).
         var range = ToRange(result.EditSpan);
+        // Quote-race compensation (see XamlCompletionResult / CLAUDE.md "Open
+        // issues"). When the value-slot session was opened by TYPING the quote,
+        // VS snapshots its applicable span mid-race (before onTypeFormatting's
+        // auto-pair lands) and eats the closing quote on commit. Append it back
+        // — but ONLY for that `"`-trigger session: a Ctrl+Space session (no
+        // trigger char) opens against the settled `=""` buffer and is already
+        // correct, so appending there would double the quote.
+        var suffix = result.ValueQuote is { } q && trigger == q.ToString()
+            ? q.ToString()
+            : "";
         var items = result.Entries
             .Select(e => new CompletionItem
             {
                 Label = e.Label,
                 Kind = MapKind(e.Kind),
                 Detail = e.Detail,
-                TextEdit = new TextEdit { Range = range, NewText = (e.InsertText ?? e.Label) + result.InsertSuffix },
+                TextEdit = new TextEdit { Range = range, NewText = (e.InsertText ?? e.Label) + suffix },
             })
             .ToArray();
         return Task.FromResult(new CompletionList(items));
