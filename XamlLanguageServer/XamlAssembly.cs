@@ -473,17 +473,44 @@ internal sealed class XamlAssembly
     }
 
     // The literal static fields of an enum — its member names. The caller has
-    // already confirmed `def` is an enum.
+    // already confirmed `def` is an enum. The zero-valued member is skipped: by
+    // convention it is the implicit Default, never a value the author needs to type.
     private static String[]? ReadEnumLiterals(MetadataReader reader, TypeDefinition def)
     {
         var names = new List<String>();
         foreach (var fh in def.GetFields())
         {
             var fd = reader.GetFieldDefinition(fh);
-            if ((fd.Attributes & FieldAttributes.Static) != 0 && (fd.Attributes & FieldAttributes.Literal) != 0)
-                names.Add(reader.GetString(fd.Name));
+            if ((fd.Attributes & FieldAttributes.Static) == 0 || (fd.Attributes & FieldAttributes.Literal) == 0)
+                continue;
+            if (IsZeroLiteral(reader, fd))
+                continue;
+            names.Add(reader.GetString(fd.Name));
         }
         return names.Count > 0 ? [.. names] : null;
+    }
+
+    // True when an enum literal's constant value is 0, across whatever integral
+    // underlying type the enum uses.
+    private static Boolean IsZeroLiteral(MetadataReader reader, FieldDefinition fd)
+    {
+        var ch = fd.GetDefaultValue();
+        if (ch.IsNil)
+            return false;
+        var constant = reader.GetConstant(ch);
+        var blob = reader.GetBlobReader(constant.Value);
+        return constant.TypeCode switch
+        {
+            ConstantTypeCode.SByte => blob.ReadSByte() == 0,
+            ConstantTypeCode.Byte => blob.ReadByte() == 0,
+            ConstantTypeCode.Int16 => blob.ReadInt16() == 0,
+            ConstantTypeCode.UInt16 => blob.ReadUInt16() == 0,
+            ConstantTypeCode.Int32 => blob.ReadInt32() == 0,
+            ConstantTypeCode.UInt32 => blob.ReadUInt32() == 0,
+            ConstantTypeCode.Int64 => blob.ReadInt64() == 0,
+            ConstantTypeCode.UInt64 => blob.ReadUInt64() == 0,
+            _ => false
+        };
     }
 
     private static String AttributeTypeName(MetadataReader reader, CustomAttribute ca)
