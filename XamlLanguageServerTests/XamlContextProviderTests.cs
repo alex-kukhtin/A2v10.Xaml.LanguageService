@@ -272,6 +272,40 @@ public class XamlContextProviderTests
     }
 
     [Fact]
+    public void Complete_property_element_tag_name_offers_owner_properties()
+    {
+        using var resolver = new AssemblyResolver();
+        resolver.EnsureFolderFor(Path.Combine(FixtureProjectDir(), "any.vxaml"));
+        var ctx = new XamlContextProvider(resolver);
+
+        // `<Table.|` — the property-element TAG NAME is being typed inside <Table>.
+        // The slot offers Table's settable property names, qualified `Table.Prop`
+        // (both the scalar GridLines and the collection Header, unlike the CHILDREN
+        // inside a property element where only collections qualify). The bare
+        // property name must NOT appear — the whole `Table.` is the replaced token.
+        const string src =
+            """
+            <Table xmlns="clr-namespace:A2v10.Xaml;assembly=A2v10.Xaml">
+            <Table.
+            </Table>
+            """;
+        var doc = XamlParser.Parse(src);
+
+        var result = ctx.Complete(doc, 1, 7);
+
+        Assert.Contains(result.Entries, e => e.Label == "Table.GridLines");
+        Assert.Contains(result.Entries, e => e.Label == "Table.Header");
+        Assert.DoesNotContain(result.Entries, e => e.Label == "GridLines");
+
+        // The replaced token is the whole `Table.` under the caret (dot included,
+        // `<` excluded), so accepting `Table.Header` overwrites it cleanly rather
+        // than duplicating.
+        Assert.Equal(1, result.EditSpan.StartLine);
+        Assert.Equal(1, result.EditSpan.StartColumn);
+        Assert.Equal(6, result.EditSpan.Length);
+    }
+
+    [Fact]
     public void Complete_inside_extension_properties()
     {
         using var resolver = new AssemblyResolver();

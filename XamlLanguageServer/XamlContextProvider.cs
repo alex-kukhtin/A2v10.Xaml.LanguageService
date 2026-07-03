@@ -57,7 +57,7 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
         var entries = ctx switch
         {
             TagNameContext => WithSyntax(RootEntries(doc)),
-            ChildTagNameContext ctn => ContentEntries(doc, ctn.Container, offerSyntax: true),
+            ChildTagNameContext ctn => ChildTagEntries(doc, ctn),
             ElementContentContext ecc => ContentEntries(doc, ecc.Element, offerSyntax: false),
             TagInteriorContext => [],
             AttributeNameContext anc => [.. PropertyEntries(ResolveType(doc, anc.Element)), .. AttachedEntries(doc, anc.Element)],
@@ -152,6 +152,43 @@ internal sealed class XamlContextProvider(AssemblyResolver _resolver)
         return [.. ReachableTypes(doc)
             .Where(x => x.Type.IsMarkupExtension)
             .Select(CreateCompletionTag)];
+    }
+
+    // A child tag slot (`<` already typed). A partial name carrying a dot is a
+    // property-element tag name being typed (`<Button.|`): offer the owner type's
+    // property names. Otherwise it is an ordinary child element: offer the
+    // container's content model. The dot lives on the partial tag (ctn.Element),
+    // NOT on the container — a different signal from the container-name dot that
+    // ContentEntries reads (children INSIDE a property element), so it is decided
+    // here, before ContentEntries.
+    private IReadOnlyList<XamlCompletionEntry> ChildTagEntries(XamlDocument doc, ChildTagNameContext ctn)
+    {
+        if (ctn.Element is { } partial)
+        {
+            var typed = doc.TextOf(partial.OpenNameSpan);
+            var dot = typed.IndexOf('.');
+            if (dot >= 0)
+                return PropertyElementNameEntries(doc, typed[..dot]);
+        }
+        return ContentEntries(doc, ctn.Container, offerSyntax: true);
+    }
+
+    // Property-element tag name being typed (`<Button.|`): the owner type's
+    // settable property names, each labelled `Owner.Prop` (the whole `Owner.`
+    // under the caret is the replaced token — IdentifierSpanAt covers the dot).
+    // Owner is the typed prefix before the dot — the element's own type, or any
+    // type for an attached property in element form (`my:Grid.Row`). EVERY
+    // settable property qualifies (scalar or collection), unlike the CHILDREN
+    // inside a property element (PropertyElementEntries), which need a collection
+    // element type. Unknown owner offers nothing.
+    private IReadOnlyList<XamlCompletionEntry> PropertyElementNameEntries(XamlDocument doc, String ownerName)
+    {
+        var owner = ResolveType(doc, ownerName);
+        if (owner == null)
+            return [];
+        return [.. owner.Type.Properties
+            .Select(p => new XamlCompletionEntry(
+                $"{owner.QualifiedName}.{p.Name}", XamlCompletionKind.Attribute, null))];
     }
 
     // offerSyntax appends the comment / CDATA snippets — true only for the child
