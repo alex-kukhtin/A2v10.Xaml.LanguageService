@@ -188,23 +188,54 @@ internal sealed class MarkupExtensionParser
         var c = _src[_pos];
         if (c == ',' || IsExtensionBarrier(c)) return null;
 
-        if (c == '{')
+        // A '{' begins a NESTED extension only when a type name follows. The
+        // empty brace pair '{}' is the XAML literal-string escape (same rule as
+        // TryParse applies at the top level) — e.g. `Format={}{0}/511`, where the
+        // leading '{}' says "the rest is a literal string". An escaped value falls
+        // through to the string reader below, which tracks brace depth so the
+        // inner '{0}' stays text and does not re-open extension parsing.
+        if (c == '{' && !(_pos + 1 < _end && _src[_pos + 1] == '}'))
         {
-            // Nested extension. Spec '{}' escape doesn't apply inside an
-            // extension value, so always parse — empty type name is fine.
             var nested = ParseExtension();
             if (parent != null) nested.Parent = parent;
             return nested;
         }
 
-        // Bare string value: read until separator. Trim trailing whitespace
-        // so spans match user-visible text.
+        // String value. Two shapes, decided by the FIRST character:
+        //   * a value that BEGINS with a quote (' or ") is a quoted literal — the
+        //     matching quote delimits it, so ',' '{' '}' inside are text and a
+        //     format string like '{}{0}, sht' with an inner comma stays one value.
+        //     A quote NOT at the start (don't) is an ordinary character, never a
+        //     delimiter — hence the `_pos == start.Pos` gate below (via `quote`).
+        //   * otherwise a bare token read with brace-depth tracking — inner '{...}'
+        //     pairs (the '{}' escape, a '{0}' placeholder) are literal, and only a
+        //     ',' or the extension-closing '}' at depth 0 ends it.
+        // The tag barriers '<' / '>' end either shape (the unterminated-outer-value
+        // runaway guard) even inside a quote. A bare token's trailing whitespace is
+        // trimmed so spans match user-visible text; a quoted token keeps its interior.
         var start = Snapshot();
         var lastNonWs = Snapshot();
+        var quote = (c == '\'' || c == '"') ? c : '\0';
+        var depth = 0;
+        if (quote != '\0') { Consume(); lastNonWs = Snapshot(); }
         while (_pos < _end)
         {
             var ch = _src[_pos];
-            if (ch == ',' || ch == '{' || IsExtensionBarrier(ch)) break;
+            if (ch == '<' || ch == '>') break;        // tag barrier (unterminated guard)
+            if (quote != '\0')
+            {
+                Consume();
+                lastNonWs = Snapshot();
+                if (ch == quote) break;               // matching close quote consumed
+                continue;
+            }
+            if (ch == '}')
+            {
+                if (depth == 0) break;                // extension close
+                depth--;
+            }
+            else if (ch == '{') depth++;
+            else if (ch == ',' && depth == 0) break;  // argument separator
             Consume();
             if (!IsWs(ch))
                 lastNonWs = Snapshot();

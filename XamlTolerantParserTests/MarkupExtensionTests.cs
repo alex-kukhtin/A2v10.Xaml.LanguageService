@@ -235,6 +235,73 @@ public class MarkupExtensionTests
     }
 
     [Fact]
+    public void Escape_in_argument_value_is_literal_not_nested_extension()
+    {
+        // `Format={}{0}/511` — the '{}' is the XAML literal-string escape, and the
+        // inner '{0}' is a placeholder. Neither is a nested extension: the whole
+        // `{}{0}/511` is one literal argument value and NO "Expected markup
+        // extension type name." diagnostic is raised.
+        const string src = "<Span Content=\"{Bind Len, Format={}{0}/511}\" />";
+        var doc = Parse(src);
+        var ext = ((XamlElement)doc.Roots[0]).Attributes[0].Value!.Extension!;
+
+        Assert.Equal(2, ext.Arguments.Count);
+        var fmt = Assert.IsType<XamlNamedArgument>(ext.Arguments[1]);
+        Assert.Equal("Format", TextOf(src, fmt.NameSpan));
+        Assert.Equal("{}{0}/511", TextOf(src, ((XamlExtensionStringValue)fmt.Value!).Span));
+        Assert.True(ext.IsClosed);
+        Assert.Empty(doc.Diagnostics);
+    }
+
+    [Fact]
+    public void Quoted_escape_argument_value_is_one_literal()
+    {
+        // The real-world form: single-quoted value carrying the '{}' escape and a
+        // '{0}' placeholder. Brace-depth tracking keeps the whole `'{}{0}/511'` as
+        // one value (quotes ride along as text) — no false diagnostic.
+        const string src = "<Span Content=\"{Bind Len, Format='{}{0}/511'}\" />";
+        var doc = Parse(src);
+        var ext = ((XamlElement)doc.Roots[0]).Attributes[0].Value!.Extension!;
+
+        Assert.Equal(2, ext.Arguments.Count);
+        var fmt = Assert.IsType<XamlNamedArgument>(ext.Arguments[1]);
+        Assert.Equal("'{}{0}/511'", TextOf(src, ((XamlExtensionStringValue)fmt.Value!).Span));
+        Assert.Empty(doc.Diagnostics);
+    }
+
+    [Fact]
+    public void Comma_inside_quoted_value_does_not_split_the_argument()
+    {
+        // A quoted value delimits its content: an inner ',' is part of the format
+        // string, NOT an argument separator. The whole `'{}{0}, sht'` is one value,
+        // so the extension has exactly two arguments (Len, Format) — not three.
+        const string src = "<Span Content=\"{Bind Len, Format='{}{0}, sht'}\" />";
+        var doc = Parse(src);
+        var ext = ((XamlElement)doc.Roots[0]).Attributes[0].Value!.Extension!;
+
+        Assert.Equal(2, ext.Arguments.Count);
+        var fmt = Assert.IsType<XamlNamedArgument>(ext.Arguments[1]);
+        Assert.Equal("'{}{0}, sht'", TextOf(src, ((XamlExtensionStringValue)fmt.Value!).Span));
+        Assert.Empty(doc.Diagnostics);
+    }
+
+    [Fact]
+    public void Quote_not_at_value_start_is_an_ordinary_character()
+    {
+        // A quote in the MIDDLE of a bare value (an apostrophe) is literal, not a
+        // delimiter — only a leading quote opens a quoted run. `don't` reads whole
+        // and the extension still closes cleanly at the '}'.
+        const string src = "<Span Content=\"{Bind don't}\" />";
+        var doc = Parse(src);
+        var ext = ((XamlElement)doc.Roots[0]).Attributes[0].Value!.Extension!;
+
+        var pos = Assert.IsType<XamlPositionalArgument>(Assert.Single(ext.Arguments));
+        Assert.Equal("don't", TextOf(src, ((XamlExtensionStringValue)pos.Value!).Span));
+        Assert.True(ext.IsClosed);
+        Assert.Empty(doc.Diagnostics);
+    }
+
+    [Fact]
     public void Trailing_equals_with_no_value_keeps_arg_with_null_value()
     {
         const string src = "<Button Tag=\"{Binding Path=}\" />";
